@@ -1,7 +1,6 @@
-
 // --- APP VERSION ---
 const APP_STAGE = "Alpha";
-const APP_VERSION = "0.2.5";
+const APP_VERSION = "0.2.6";
 
 // --- CONSTANTS ---
 const instruments = [
@@ -59,10 +58,6 @@ let activeSources = [];
 
 // --- INITIALIZATION ---
 function init() {
-            // Version label (UI)
-            const vEl = document.getElementById('version-label');
-            if (vEl) vEl.textContent = `${APP_STAGE} Version ${APP_VERSION}`;
-
     generateRuler();
     renderResources();
     renderPlaylist();
@@ -487,35 +482,28 @@ function playPatternStep(grid, stepIdx, time) {
 
 function playAudioClip(id, time) {
     const clipData = state.audioClips[id];
-
-    // Must be raw AudioBuffer (decoded via native decodeAudioData)
-    if (!clipData || !clipData.buffer) return;
+    if(!clipData || !clipData.buffer) return;
 
     try {
+        // Use native WebAudio playback for user-imported buffers (avoids Tone buffer "not loaded" errors)
         const ctx = Tone.context.rawContext;
+        const src = ctx.createBufferSource();
+        src.buffer = clipData.buffer;
 
-        // Native WebAudio source (avoids ToneBufferSource 'not loaded' issues with raw AudioBuffer)
-        const source = ctx.createBufferSource();
-        source.buffer = clipData.buffer;
+        // Direct to output (keep it simple and reliable inside iframes/PWA)
+        src.connect(ctx.destination);
 
-        // Route through Tone's destination if available, else raw destination
-        const dest = (Tone.Destination && Tone.Destination.input) ? Tone.Destination.input : ctx.destination;
-        source.connect(dest);
+        src.start(time);
+        activeSources.push(src);
 
-        // Schedule at Tone's AudioContext time
-        source.start(time);
-
-        activeSources.push(source);
-
-        source.onended = () => {
-            const idx = activeSources.indexOf(source);
-            if (idx > -1) activeSources.splice(idx, 1);
+        src.onended = () => {
+            const index = activeSources.indexOf(src);
+            if (index > -1) activeSources.splice(index, 1);
         };
     } catch (e) {
         console.error("Audio playback error:", e);
     }
 }
-
 
 function clearCurrentPattern() {
     if(state.selectedResType === 'pattern') {
