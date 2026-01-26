@@ -104,7 +104,7 @@ function wireFxWindowDrag(){
   });
   window.addEventListener("mouseup",()=>{ dragging=false; });
 }
-/ --- CONSTANTS ---
+// --- CONSTANTS ---
 const instruments = [
     { name: "Kick", note: "C1" }, 
     { name: "Snare", note: "D1" }, 
