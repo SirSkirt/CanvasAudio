@@ -122,97 +122,7 @@ button#stop-btn:hover { background: #d32f2f; }
 .playlist-scroll { flex: 1; overflow: auto; position: relative; }
 
 .track-row { display: flex; height: var(--track-height); border-bottom: 1px solid #252525; position: relative; }
-.track-header {
-  width: 120px;
-  min-width: 120px;
-  background: #222;
-  border-right: 1px solid #333;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 8px 6px;
-  font-size: 12px;
-  color: #777;
-  position: sticky;
-  left: 0;
-  z-index: 10;
-  box-shadow: 2px 0 5px rgba(0,0,0,0.2);
-}
-
-.track-name {
-  width: 100%;
-  text-align: center;
-  color: #8a8a8a;
-  user-select: none;
-}
-
-.track-controls {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-}
-
-.track-arm {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  border: 2px solid #a33;
-  background: transparent;
-  cursor: pointer;
-  padding: 0;
-}
-
-.track-arm.armed {
-  background: #d00;
-  box-shadow: 0 0 10px rgba(255,0,0,0.35);
-}
-
-.track-input {
-  width: 26px;
-  height: 22px;
-  border-radius: 3px;
-  border: 1px solid #333;
-  background: #111;
-  color: #ddd;
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 20px;
-  padding: 0;
-}
-
-.track-input:hover, .track-arm:hover {
-  filter: brightness(1.15);
-}
-
-.track-input-menu {
-  position: fixed;
-  background: #1b1b1b;
-  border: 1px solid #333;
-  border-radius: 6px;
-  padding: 6px;
-  z-index: 9999;
-  min-width: 160px;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.45);
-}
-
-.track-input-menu button {
-  width: 100%;
-  text-align: left;
-  background: transparent;
-  border: 0;
-  color: #ddd;
-  padding: 8px 10px;
-  cursor: pointer;
-  border-radius: 4px;
-  font-size: 12px;
-}
-
-.track-input-menu button:hover {
-  background: #2a2a2a;
-}
+.track-header { width: 120px; min-width: 120px; background: #222; border-right: 1px solid #333; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #777; position: sticky; left: 0; z-index: 10; box-shadow: 2px 0 5px rgba(0,0,0,0.2); }
 .track-lane { display: flex; position: relative; flex-grow: 1; background-image: linear-gradient(90deg, #1f1f1f 1px, transparent 1px); background-size: var(--cell-width) 100%; }
 
 .clip { position: absolute; top: 2px; bottom: 2px; border-radius: 4px; overflow: hidden; cursor: pointer; box-shadow: 2px 2px 4px rgba(0,0,0,0.3); z-index: 5; border: 1px solid rgba(255,255,255,0.1); }
@@ -241,256 +151,66 @@ button#stop-btn:hover { background: #d32f2f; }
 
 
 
-/* --- FX Window (Plugins) --- */
-.fx-btn{
-  background:#2a2a2a;
-  border:1px solid #555;
-  color:#ddd;
-  font-size:12px;
-  padding:2px 6px;
-  border-radius:3px;
-  cursor:pointer;
-  margin-left:6px;
-}
-.fx-btn:hover{ filter:brightness(1.1); }
-
-#fxOverlay{
-  position:fixed;
-  inset:0;
-  background:rgba(0,0,0,0.45);
-  display:none;
+/* --- Main menu overlay + audio status --- */
+.main-menu-overlay{
+  position:fixed; inset:0;
+  display:flex; align-items:center; justify-content:center;
+  background:rgba(0,0,0,0.55);
   z-index:9999;
 }
-#fxWindow{
-  position:absolute;
-  top:60px;
-  left:60px;
-  width:420px;
-  background:#2b2b2b;
-  border:1px solid #555;
-  border-radius:6px;
-  box-shadow:0 10px 30px rgba(0,0,0,0.6);
-  color:#e6e6e6;
-  font-family:Arial, sans-serif;
+.main-menu-card{
+  width:min(420px, 92vw);
+  background:#1b1d22;
+  border:1px solid rgba(255,255,255,0.12);
+  border-radius:14px;
+  padding:18px;
+  box-shadow:0 10px 30px rgba(0,0,0,0.45);
 }
-#fxWindow .fxwin-header{
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
-  padding:8px 10px;
-  background:#1f1f1f;
-  border-bottom:1px solid #444;
-  cursor:move;
+.main-menu-title{
+  font-size:22px;
+  font-weight:700;
+  margin-bottom:12px;
 }
-#fxWindow .fxwin-header .fxwin-titlebar{
-  font-weight:bold;
-  font-size:13px;
-  opacity:0.9;
-}
-#fxWindow .fxwin-header button{
-  background:#333;
-  border:1px solid #555;
-  color:#ddd;
-  padding:2px 8px;
-  border-radius:4px;
+.main-menu-btn{
+  width:100%;
+  margin:8px 0;
+  padding:12px 14px;
+  border-radius:10px;
+  border:1px solid rgba(255,255,255,0.14);
+  background:#2a2e36;
+  color:#fff;
   cursor:pointer;
 }
-#fxWindow .fxwin-body{
-  padding:10px;
-}
-.fxwin-row{
-  display:flex;
-  align-items:center;
-  gap:8px;
-  margin:8px 0;
+.main-menu-btn:active{ transform: translateY(1px); }
+.main-menu-hint{
+  margin-top:10px;
+  opacity:0.75;
   font-size:12px;
 }
-.fxwin-row label{
-  min-width:70px;
-  opacity:0.85;
-}
-.fxwin-row select, .fxwin-row input[type="range"]{
-  flex:1;
-}
-.fxwin-value{
-  min-width:48px;
-  text-align:right;
-  opacity:0.9;
-}
-.fxwin-title{
-  font-weight:bold;
-  margin-bottom:6px;
-}
-.fxwin-note{
-  opacity:0.7;
-  line-height:1.3;
-}
-
-
-/* --- Mixer Window --- */
-#mixerOverlay{
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.55);
-  z-index: 10020;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-#mixerWindow{
-  width: min(980px, 94vw);
-  height: min(520px, 86vh);
-  background: #1e1f22;
-  border: 1px solid #3a3d44;
-  border-radius: 10px;
-  box-shadow: 0 14px 40px rgba(0,0,0,0.55);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-#mixerTitleBar{
-  height: 40px;
-  background: #25272c;
-  border-bottom: 1px solid #3a3d44;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 10px;
-  color: #e6e6e6;
-  font-weight: 600;
-  user-select: none;
-}
-
-#mixerCloseBtn{
-  width: 34px;
-  height: 28px;
-  border: 1px solid #3a3d44;
-  background: #1e1f22;
-  color: #e6e6e6;
-  border-radius: 6px;
-  cursor: pointer;
-}
-#mixerCloseBtn:hover{ background:#2a2c31; }
-
-#mixerBody{
-  flex: 1;
-  overflow: auto;
-  padding: 12px;
-}
-
-#mixerChannels{
-  display: flex;
-  gap: 10px;
-  align-items: flex-end;
-}
-
-.mixerChannel{
-  width: 94px;
-  background: #24262b;
-  border: 1px solid #343741;
-  border-radius: 10px;
-  padding: 8px 8px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  color: #d6d6d6;
-}
-
-.mixerChannel .chTitle{
-  font-size: 12px;
-  color: #bdbdbd;
-  text-align: center;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.mixerChannel .chRow{
-  display: flex;
-  gap: 6px;
-  justify-content: center;
-  align-items: center;
-}
-
-.mixerBtnSmall{
-  width: 28px;
-  height: 24px;
-  border: 1px solid #3a3d44;
-  background: #1e1f22;
-  color: #e6e6e6;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 12px;
-}
-.mixerBtnSmall.active{ background:#2d5f2f; border-color:#3a7a3f; }
-
-.mixerSliderWrap{
-  position: relative;
-  width: 60px;
-  height: 210px;
+.audio-status-panel{
+  position:fixed;
+  right:12px;
+  bottom:12px;
   display:flex;
-  justify-content:center;
   align-items:center;
+  gap:10px;
+  padding:10px 12px;
+  background:rgba(15,16,20,0.92);
+  border:1px solid rgba(255,255,255,0.14);
+  border-radius:12px;
+  z-index:10000;
+  backdrop-filter: blur(6px);
 }
-
-
-/* Mixer level meter (behind fader) */
-.mixerMeter{
-  position:absolute;
-  left:50%;
-  transform:translateX(-50%);
-  bottom: 22px;
-  width: 18px;
-  height: 170px;
-  background:#0f1013;
-  border:1px solid #2a2b2f;
-  border-radius:6px;
-  overflow:hidden;
+.audio-status-text{
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size:12px;
+  opacity:0.92;
 }
-.mixerMeterFill{
-  position:absolute;
-  left:0;
-  bottom:0;
-  width:100%;
-  height:0%;
-  background:#6aa84f;
+.audio-toggle-btn{
+  padding:8px 10px;
+  border-radius:10px;
+  border:1px solid rgba(255,255,255,0.14);
+  background:#2a2e36;
+  color:#fff;
+  cursor:pointer;
 }
-.mixerMeterDb{
-  position:absolute;
-  left:50%;
-  transform:translateX(-50%);
-  bottom:0;
-  font-size:11px;
-  color:#b8b8b8;
-  pointer-events:none;
-}
-
-
-.mixerFader{
-  position:absolute;
-  left:50%;
-  transform:translateX(-50%);
-  bottom: 22px;
-  writing-mode: bt-lr;
-  -webkit-appearance: slider-vertical;
-  width: 44px;
-  height: 170px;
-}
-
-.mixerKnob{
-  width: 100%;
-}
-
-.mixerLabelSmall{
-  font-size: 11px;
-  color: #9fa2aa;
-  text-align: center;
-}
-
-
-/* Make the fader track transparent so the meter shows through */
-.mixerFader::-webkit-slider-runnable-track{ background: transparent; border: none; }
-.mixerFader::-moz-range-track{ background: transparent; border: none; }
-.mixerFader::-ms-track{ background: transparent; border: none; color: transparent; }

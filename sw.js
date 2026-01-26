@@ -1,4 +1,4 @@
-const CACHE = "canvasaudio-shell-v030";
+const CACHE = "canvasaudio-shell-v031";
 const ASSETS = [
   "./",
   "./index.html",

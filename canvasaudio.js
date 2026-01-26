@@ -1,20 +1,35 @@
+
 // --- APP VERSION ---
 const APP_STAGE = "Alpha";
-const APP_VERSION = "0.3.0";
+const APP_VERSION = "0.3.1";
+window.CA_VERSION = APP_VERSION;
 
+const APP_BUILD = "1";
+// --- CONSTANTS ---
 const instruments = [
-  { id: 'kick',  name: 'Kick',  track: 0 },
-  { id: 'snare', name: 'Snare', track: 1 },
-  { id: 'hihat', name: 'Hi-Hat', track: 2 },
-  { id: 'clap',  name: 'Clap',  track: 3 }
+    { name: "Kick", note: "C1" }, 
+    { name: "Snare", note: "D1" }, 
+    { name: "HiHat", note: "E1" }, // Synthesized
+    { name: "Clap", note: "F1" }   // Synthesized
 ];
 
+// --- STATE ---
 let state = {
+    audioReady: false,
     isPlaying: false,
     mode: 'PATTERN', // 'PATTERN' | 'SONG'
     bpm: 128,
     currentStep: 0,
     timeSig: 4, // 4 beats per bar
+
+    // Recording
+    armedTrack: 0,
+    isRecording: false,
+    mediaStream: null,
+    mediaRecorder: null,
+    recordingClipId: null,
+    recordingStartPerf: 0,
+    recordingTimer: null,
     
     patterns: { 'pat1': { id:'pat1', name: "Pattern 1", grid: createEmptyGrid(4) } },
     audioClips: {}, 
@@ -22,22 +37,7 @@ let state = {
     selectedResType: 'pattern',
     selectedResId: 'pat1',
     
-    playlist: [], 
-    trackFx: [],
-    trackPlugins: [],
-    trackArm: Array(8).fill(false),
-    trackInput: Array(8).fill('Default'),
-    availableInputs: ['Default'],
-
-  mixer: {
-    enabled: true,
-    trackNames: Array.from({length: 8}, (_,i)=>`Track ${i+1}`),
-    volumes: Array(8).fill(1),
-    pans: Array(8).fill(0),
-    mutes: Array(8).fill(false),
-    solos: Array(8).fill(false)
-  },
-  _mixerNodes: null
+    playlist: [] 
 };
 
 // Initialize 8 Tracks
@@ -69,17 +69,151 @@ clapSynth.volume.value = -10;
 
 let activeSources = [];
 
+
+// --- UPDATE CHECKER ---
+function setupUpdateChecker() {
+    const banner = document.getElementById('update-banner');
+    const textEl = document.getElementById('update-text');
+    const btn = document.getElementById('update-reload');
+    if (!banner || !textEl || !btn) return;
+
+    const check = async () => {
+        try {
+            const res = await fetch(`version.json?ts=${Date.now()}`, { cache: 'no-store' });
+            if (!res.ok) return;
+            const data = await res.json();
+            if (!data || !data.version) return;
+
+            if (data.version !== APP_VERSION) {
+                textEl.textContent = `Update available (${data.version}).`;
+                banner.classList.remove('hidden');
+                btn.onclick = () => forceUpdateReload(data);
+            }
+        } catch (e) {}
+    };
+
+    check();
+    setInterval(check, 60000);
+}
+
+async function forceUpdateReload(remote) {
+    try {
+        if ('serviceWorker' in navigator) {
+            const reg = await navigator.serviceWorker.getRegistration();
+            if (reg) await reg.update();
+        }
+        if (window.caches) {
+            const keys = await caches.keys();
+            await Promise.all(keys.map((k) => caches.delete(k)));
+        }
+    } catch (e) {}
+
+    const v = remote && (remote.build || remote.version) ? (remote.build || remote.version) : String(Date.now());
+    const url = new URL(window.location.href);
+    url.searchParams.set('v', v);
+    url.searchParams.set('t', String(Date.now()));
+    window.location.replace(url.toString());
+}
+
 // --- INITIALIZATION ---
 function init() {
+            // Version label (UI)
+            const vEl = document.getElementById('version-label');
+            if (vEl) vEl.textContent = `${APP_STAGE} Version ${APP_VERSION}`;
+
+    setupUpdateChecker();
+
     generateRuler();
     renderResources();
     renderPlaylist();
     renderChannelRack();
     selectResource('pattern', 'pat1');
-    initMixerUI();
-    startMixerMeterLoop();
     Tone.Transport.bpm.value = 128;
+    // Audio engine starts only after explicit user action via the Audio panel.
+    setupAudioStatusPanel();
+    setupMainMenu();
+    setVersionLabel();
+
 }
+
+
+
+// --- VERSION LABEL ---
+function setVersionLabel(){
+    const el = document.getElementById('versionLabel');
+    if(el) el.innerText = "v" + APP_VERSION;
+}
+
+// --- MAIN MENU (WIP) ---
+function setupMainMenu(){
+    const overlay = document.getElementById('mainMenuOverlay');
+    if(!overlay) return;
+
+    const close = () => { overlay.style.display = 'none'; };
+
+    const btnNew = document.getElementById('menuNewProject');
+    const btnOpen = document.getElementById('menuOpenProject');
+    const btnRecent = document.getElementById('menuRecentProject');
+
+    if(btnNew) btnNew.onclick = close;
+    if(btnOpen) btnOpen.onclick = close;
+    if(btnRecent) btnRecent.onclick = close;
+}
+
+// --- AUDIO READY PANEL ---
+function updateAudioStatusUI(){
+    const text = document.getElementById('audioStatusText');
+    const btn  = document.getElementById('audioToggleBtn');
+
+    const ready = (Tone.context && Tone.context.state === 'running');
+    state.audioReady = ready;
+
+    if(text) text.innerText = ready ? "Audio Ready" : "Audio Not Ready";
+    if(btn)  btn.innerText  = ready ? "Stop" : "Start";
+}
+
+async function startAudioEngine(){
+    if(Tone.context && Tone.context.state !== 'running'){
+        await Tone.start(); // resumes AudioContext after user gesture
+    }
+    updateAudioStatusUI();
+}
+
+async function stopAudioEngine(){
+    try{
+        if(Tone.Transport && Tone.Transport.state === 'started'){
+            Tone.Transport.stop();
+        }
+        if(Tone.context && Tone.context.state === 'running'){
+            await Tone.context.suspend();
+        }
+    }catch(e){}
+    updateAudioStatusUI();
+}
+
+function setupAudioStatusPanel(){
+    const btn = document.getElementById('audioToggleBtn');
+    if(btn){
+        btn.onclick = async () => {
+            updateAudioStatusUI();
+            if(state.audioReady) await stopAudioEngine();
+            else await startAudioEngine();
+        };
+    }
+    updateAudioStatusUI();
+}
+
+// Ensure audio is running for actions that need real-time playback/recording.
+async function ensureAudioReady(){
+    if(Tone.context && Tone.context.state === 'running'){
+        state.audioReady = true;
+        return true;
+    }
+    // Do not auto-start on load; but if the user presses play/record, start now (user gesture).
+    await startAudioEngine();
+    return (Tone.context && Tone.context.state === 'running');
+}
+
 
 // --- DATA HELPERS ---
 function createEmptyGrid(beats) {
@@ -115,12 +249,7 @@ function toggleFullscreen() {
 async function handleAudioUpload(input) {
     const file = input.files[0];
     if(!file) return;
-
-    if (Tone.context.state !== 'running') {
-        await Tone.start();
-    }
-
-    const id = 'audio' + Date.now();
+const id = 'audio' + Date.now();
     const reader = new FileReader();
     
     reader.onload = async (e) => {
@@ -193,7 +322,7 @@ function generateRuler() {
     ruler.innerHTML = ''; // Clear prev
     for(let i=1; i<=50; i++) {
         const div = document.createElement('div');
-        div.className = 'ruler-tick';
+        div.className = 'ruler-segment';
         div.innerText = i;
         ruler.appendChild(div);
     }
@@ -209,41 +338,12 @@ function renderPlaylist() {
         
         const header = document.createElement('div');
         header.className = 'track-header';
-
-        const name = document.createElement('div');
-        name.className = 'track-name';
-        name.innerText = `Track ${trackIndex + 1}`;
-        header.appendChild(name);
-
-        const controls = document.createElement('div');
-        controls.className = 'track-controls';
-
-        // Arm (record enable) toggle (UI only; routing comes later)
-        const armBtn = document.createElement('button');
-        armBtn.className = 'track-arm' + (state.trackArm && state.trackArm[trackIndex] ? ' armed' : '');
-        armBtn.title = (state.trackArm && state.trackArm[trackIndex]) ? 'Disarm track' : 'Arm track';
-        armBtn.type = 'button';
-        armBtn.onclick = (e) => {
-            e.stopPropagation();
-            if(!state.trackArm) state.trackArm = Array(trackCount).fill(false);
-            state.trackArm[trackIndex] = !state.trackArm[trackIndex];
-            renderPlaylist();
-        };
-        controls.appendChild(armBtn);
-
-        // Input selector (UI only)
-        const inputBtn = document.createElement('button');
-        inputBtn.className = 'track-input';
-        inputBtn.type = 'button';
-        inputBtn.title = 'Select input';
-        inputBtn.innerText = '🎤';
-        inputBtn.onclick = (e) => {
-            e.stopPropagation();
-            openTrackInputMenu(trackIndex, inputBtn);
-        };
-        controls.appendChild(inputBtn);
-
-        header.appendChild(controls);
+        header.innerHTML = `
+            <button class="arm-btn ${state.armedTrack === trackIndex ? 'active' : ''}" onclick="setArmedTrack(${trackIndex})" title="Arm Track">
+                <i class="fas fa-circle"></i>
+            </button>
+            Track ${trackIndex + 1}
+        `;
         row.appendChild(header);
 
         const lane = document.createElement('div');
@@ -286,7 +386,13 @@ function renderPlaylist() {
                 canvas.width = width;
                 canvas.height = 56;
                 el.appendChild(canvas);
-                drawWaveform(state.audioClips[clip.id].buffer, canvas);
+                const clipData = state.audioClips[clip.id];
+                if (clipData.buffer) {
+                    drawWaveform(clipData.buffer, canvas);
+                } else if (clipData.isRecording) {
+                    el.classList.add('clip-recording');
+                    drawRecordingPlaceholder(canvas);
+                }
             } else if (clip.type === 'pattern') {
                  const gridDiv = document.createElement('div');
                  gridDiv.style.width = '100%';
@@ -305,51 +411,17 @@ function renderPlaylist() {
     });
 }
 
-// --- Track Input Menu (UI only) ---
-let _trackInputMenuEl = null;
-function closeTrackInputMenu(){
-    if(_trackInputMenuEl){
-        _trackInputMenuEl.remove();
-        _trackInputMenuEl = null;
-        document.removeEventListener('mousedown', _trackInputMenuOutsideHandler, true);
-    }
-}
-function _trackInputMenuOutsideHandler(e){
-    if(_trackInputMenuEl && !(_trackInputMenuEl.contains(e.target))){
-        closeTrackInputMenu();
-    }
-}
-function openTrackInputMenu(trackIndex, anchorEl){
-    closeTrackInputMenu();
-    const list = (state.availableInputs && state.availableInputs.length) ? state.availableInputs : ['Default'];
-    if(!state.trackInput) state.trackInput = Array(8).fill('Default');
-
-    const menu = document.createElement('div');
-    menu.className = 'track-input-menu';
-
-    list.forEach((name) => {
-        const item = document.createElement('div');
-        item.className = 'track-input-item' + (state.trackInput[trackIndex] === name ? ' selected' : '');
-        item.innerText = name;
-        item.onclick = (e) => {
-            e.stopPropagation();
-            state.trackInput[trackIndex] = name;
-            closeTrackInputMenu();
-            renderPlaylist();
-        };
-        menu.appendChild(item);
-    });
-
-    document.body.appendChild(menu);
-    _trackInputMenuEl = menu;
-
-    const r = anchorEl.getBoundingClientRect();
-    menu.style.left = Math.round(r.left) + 'px';
-    menu.style.top = Math.round(r.bottom + 6) + 'px';
-
-    setTimeout(() => {
-        document.addEventListener('mousedown', _trackInputMenuOutsideHandler, true);
-    }, 0);
+function drawRecordingPlaceholder(canvas) {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = 'rgba(229,57,53,0.15)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = 'rgba(229,57,53,0.9)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(2, canvas.height/2);
+    ctx.lineTo(canvas.width-2, canvas.height/2);
+    ctx.stroke();
 }
 
 function addClipToTrack(trackIndex, startBar) {
@@ -473,10 +545,7 @@ async function togglePlay() {
     if(state.isPlaying) {
         stopTransport();
     } else {
-        if (Tone.context.state !== 'running') {
-            await Tone.start();
-        }
-        updateBPM(state.bpm);
+updateBPM(state.bpm);
         Tone.Transport.start();
         state.isPlaying = true;
         document.getElementById('play-btn').classList.add('active');
@@ -496,6 +565,127 @@ function stopTransport() {
     
     document.querySelectorAll('.step.playing').forEach(s => s.classList.remove('playing'));
     document.getElementById('playhead').style.left = '120px';
+}
+
+function setArmedTrack(trackIndex) {
+    state.armedTrack = Math.max(0, Math.min(state.playlist.length - 1, trackIndex));
+    renderPlaylist();
+}
+
+async function toggleRecord() {
+    if(state.isRecording) {
+        stopRecording();
+    } else {
+        await startRecording();
+    }
+}
+
+async function startRecording() {
+    await ensureAudioReady();
+    if(state.mode !== 'SONG') {
+        alert('Recording is only available in SONG mode.');
+        return;
+    }
+// Request mic
+    try {
+        state.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+        alert('Microphone permission denied.');
+        return;
+    }
+
+    const clipId = 'rec_' + Date.now();
+    state.recordingClipId = clipId;
+    state.recordingStartPerf = performance.now();
+
+    // Create placeholder clip data
+    state.audioClips[clipId] = {
+        name: 'Recording...',
+        buffer: null,
+        url: null,
+        isRecording: true
+    };
+
+    // Place clip at current playhead position
+    const startBar = Math.floor(state.currentStep / 16);
+    const track = state.playlist[state.armedTrack] || state.playlist[0];
+    if(!state.playlist[state.armedTrack]) state.playlist[state.armedTrack] = track;
+
+    track.push({ type: 'audio', id: clipId, startBar, lengthBars: 1 });
+    renderPlaylist();
+
+    // Start recorder
+    const chunks = [];
+    state.mediaRecorder = new MediaRecorder(state.mediaStream);
+    state.mediaRecorder.ondataavailable = (ev) => { if(ev.data && ev.data.size) chunks.push(ev.data); };
+    state.mediaRecorder.onstop = async () => {
+        try {
+            const blob = new Blob(chunks, { type: state.mediaRecorder.mimeType || 'audio/webm' });
+            const arrayBuffer = await blob.arrayBuffer();
+            const decoded = await Tone.context.rawContext.decodeAudioData(arrayBuffer);
+            state.audioClips[clipId].buffer = decoded;
+            state.audioClips[clipId].name = 'Recorded Audio';
+            state.audioClips[clipId].isRecording = false;
+
+            // Finalize length
+            const secondsPerBar = (60 / state.bpm) * state.timeSig;
+            const finalBars = Math.max(1, Math.ceil(decoded.duration / secondsPerBar));
+            const t = state.playlist[state.armedTrack] || [];
+            const item = t.find(c => c.id === clipId);
+            if(item) item.lengthBars = finalBars;
+        } catch (e) {
+            console.error('Recording decode failed:', e);
+            alert('Recording failed to decode.');
+            delete state.audioClips[clipId];
+        }
+
+        renderPlaylist();
+        cleanupRecordingStream();
+    };
+
+    state.mediaRecorder.start();
+    state.isRecording = true;
+    document.getElementById('record-btn')?.classList.add('recording');
+
+    // Grow the clip in real-time (FL-style)
+    state.recordingTimer = setInterval(() => {
+        const elapsed = (performance.now() - state.recordingStartPerf) / 1000;
+        const secondsPerBar = (60 / state.bpm) * state.timeSig;
+        const bars = Math.max(1, Math.ceil(elapsed / secondsPerBar));
+        const t = state.playlist[state.armedTrack] || [];
+        const item = t.find(c => c.id === clipId);
+        if(item) {
+            item.lengthBars = bars;
+            renderPlaylist();
+        }
+    }, 200);
+}
+
+function stopRecording() {
+    if(!state.isRecording) return;
+
+    state.isRecording = false;
+    document.getElementById('record-btn')?.classList.remove('recording');
+
+    if(state.recordingTimer) {
+        clearInterval(state.recordingTimer);
+        state.recordingTimer = null;
+    }
+
+    try {
+        state.mediaRecorder?.stop();
+    } catch(e) {
+        cleanupRecordingStream();
+    }
+}
+
+function cleanupRecordingStream() {
+    try {
+        state.mediaStream?.getTracks()?.forEach(t => t.stop());
+    } catch(e) {}
+    state.mediaStream = null;
+    state.mediaRecorder = null;
+    state.recordingClipId = null;
 }
 
 // --- CLOCK ---
@@ -534,7 +724,7 @@ Tone.Transport.scheduleRepeat((time) => {
         const currentBar = Math.floor(step / 16); // Assuming standard 4/4 grid logic for arrangement for now
         const stepInBar = step % 16;
 
-        state.playlist.forEach((track, trackIndex) => {
+        state.playlist.forEach(track => {
             track.forEach(clip => {
                 if(currentBar >= clip.startBar && currentBar < clip.startBar + clip.lengthBars) {
                     if(clip.type === 'pattern') {
@@ -546,7 +736,7 @@ Tone.Transport.scheduleRepeat((time) => {
                         }
                     } 
                     if(clip.type === 'audio' && currentBar === clip.startBar && stepInBar === 0) {
-                        playAudioClip(clip.id, time, trackIndex);
+                        playAudioClip(clip.id, time);
                     }
                 }
             });
@@ -576,26 +766,40 @@ function playPatternStep(grid, stepIdx, time) {
     }
 }
 
-function playAudioClip(id, time, trackIndex = 0) {
-    const clipData = state.audioClips[id];
-    if(!clipData || !clipData.buffer) return;
+function playAudioClip(id, time) {
+            const clipData = state.audioClips[id];
+            if (!clipData) return;
 
-    try {
-        const source = new Tone.BufferSource({
-            buffer: clipData.buffer
-        }).toDestination();
-        
-        source.start(time);
-        activeSources.push(source);
-        
-        source.onended = () => {
-            const index = activeSources.indexOf(source);
-            if (index > -1) activeSources.splice(index, 1);
-        };
-    } catch (e) {
-        console.error("Audio playback error:", e);
-    }
-}
+            // Accept either a raw AudioBuffer (clipData.buffer) or Tone.Buffer (clipData.toneBuffer)
+            const rawBuffer = clipData.buffer && (clipData.buffer.getChannelData ? clipData.buffer : null);
+
+            if (!rawBuffer) return;
+
+            try {
+                const ctx = Tone.context.rawContext;
+
+                // Schedule in AudioContext time using Tone's scheduled time
+                const when = (typeof time === "number") ? time : ctx.currentTime;
+
+                const src = ctx.createBufferSource();
+                src.buffer = rawBuffer;
+
+                // Destination: connect directly to raw destination to avoid Tone wrapper issues in iframes/PWA
+                src.connect(ctx.destination);
+
+                src.start(when);
+
+                // Track active sources so Stop works
+                activeSources.push(src);
+
+                src.onended = () => {
+                    const i = activeSources.indexOf(src);
+                    if (i > -1) activeSources.splice(i, 1);
+                };
+            } catch (e) {
+                console.error("Audio playback error:", e);
+            }
+        }
 
 function clearCurrentPattern() {
     if(state.selectedResType === 'pattern') {
@@ -603,247 +807,5 @@ function clearCurrentPattern() {
         renderChannelRack();
     }
 }
-
-
-
-// --- Mixer (Basic) ---
-// Provides a simple internal mixer window (per-track volume/pan/mute/solo) and routes audio clips through track buses.
-
-function ensureMixerNodes(){
-    if(state._mixerNodes && state._mixerNodes.master && Array.isArray(state._mixerNodes.tracks) && state._mixerNodes.tracks.length===state.mixer.trackNames.length) return;
-    const trackCount = state.playlist.length || 8;
-
-    const master = new Tone.Gain(1).toDestination();
-    const tracks = [];
-    for(let i=0;i<trackCount;i++){
-        const pan = new Tone.Panner(0);
-        const gain = new Tone.Gain(1);
-        pan.connect(gain);
-        gain.connect(master);
-        tracks.push({ pan, gain });
-    }
-
-    state._mixerNodes = { master, tracks };
-    applyMixerStateToNodes();
-}
-
-function getTrackInputNode(trackIndex){
-    ensureMixerNodes();
-    if(!state._mixerNodes || !Array.isArray(state._mixerNodes.tracks)) ensureMixerNodes();
-    const t = state._mixerNodes.tracks[Math.max(0, Math.min(trackIndex, state._mixerNodes.tracks.length-1))];
-    // Future: insert FX chain before pan here.
-    return t.pan;
-}
-
-function applyMixerStateToNodes(){
-    if(!state._mixerNodes) return;
-
-    const anySolo = state.mixer?.solos?.some(Boolean);
-    const trackCount = state._mixerNodes.tracks.length;
-
-    for(let i=0;i<trackCount;i++){
-        const vol = (state.mixer?.volumes?.[i] ?? 1);
-        const panv = (state.mixer?.pans?.[i] ?? 0);
-        const muted = !!(state.mixer?.mutes?.[i]);
-        const solo = !!(state.mixer?.solos?.[i]);
-
-        const effectiveMuted = anySolo ? !solo : muted;
-
-        state._mixerNodes.tracks[i].gain.gain.value = effectiveMuted ? 0 : vol;
-        state._mixerNodes.tracks[i].pan.pan.value = panv;
-    }
-}
-
-
-function _meterValueToDb(v){
-    // Tone.Meter getValue() typically returns decibels (number) or array of numbers
-    if(Array.isArray(v)) v = Math.max(...v.map(x => (typeof x==='number'?x:-Infinity)));
-    if(typeof v !== 'number' || !isFinite(v)) return -Infinity;
-    return v;
-}
-function _dbToNorm(db){
-    // map -60dB..0dB to 0..1
-    if(!isFinite(db)) return 0;
-    const clamped = Math.max(-60, Math.min(0, db));
-    return (clamped + 60) / 60;
-}
-function updateMixerMeters(){
-    const nodes = state._mixerNodes;
-    const ui = state._mixerUi;
-    if(!nodes || !nodes.tracks || !ui || !ui.meterFills) return;
-    const n = Math.min(nodes.tracks.length, ui.meterFills.length);
-    for(let i=0;i<n;i++){
-        const t = nodes.tracks[i];
-        const fill = ui.meterFills[i];
-        const dbEl = ui.meterDbs && ui.meterDbs[i];
-        if(!t || !t.meter || !fill) continue;
-        const db = _meterValueToDb(t.meter.getValue());
-        const norm = _dbToNorm(db);
-        fill.style.height = (norm*100).toFixed(1) + '%';
-        if(dbEl){
-            dbEl.textContent = isFinite(db) ? (db.toFixed(1) + ' dB') : '-∞';
-        }
-    }
-}
-function startMixerMeterLoop(){
-    if(startMixerMeterLoop._started) return;
-    startMixerMeterLoop._started = true;
-    const step = () => {
-        try{ updateMixerMeters(); }catch(e){}
-        requestAnimationFrame(step);
-    };
-    requestAnimationFrame(step);
-}
-
-function initMixerUI(){
-    // Avoid crash if HTML not present (e.g., older embeds)
-    if(!document.getElementById('mixerOverlay')) return;
-
-    // Close when clicking backdrop
-    document.getElementById('mixerOverlay').addEventListener('click', (e)=>{
-        if(e.target && e.target.id === 'mixerOverlay') closeMixerWindow();
-    });
-
-    // Initial render
-    renderMixerChannels();
-}
-
-function openMixerWindow(){
-    ensureMixerNodes();
-    const el = document.getElementById('mixerOverlay');
-    if(el) el.style.display = 'flex';
-    renderMixerChannels();
-}
-
-function closeMixerWindow(){
-    const el = document.getElementById('mixerOverlay');
-    if(el) el.style.display = 'none';
-}
-
-function renderMixerChannels(){
-    const wrap = document.getElementById('mixerChannels');
-    if(!wrap) return;
-
-    const trackCount = state.playlist.length || 8;
-    // Ensure state arrays have correct length
-    if(!state.mixer) state.mixer = {};
-    const ensureLen = (arr, def)=>{
-        if(!Array.isArray(arr)) arr = [];
-        while(arr.length < trackCount) arr.push(def);
-        if(arr.length > trackCount) arr = arr.slice(0, trackCount);
-        return arr;
-    };
-    state.mixer.trackNames = ensureLen(state.mixer.trackNames, '');
-    state.mixer.volumes = ensureLen(state.mixer.volumes, 1);
-    state.mixer.pans = ensureLen(state.mixer.pans, 0);
-    state.mixer.mutes = ensureLen(state.mixer.mutes, false);
-    state.mixer.solos = ensureLen(state.mixer.solos, false);
-
-    // Fill default names if blank
-    for(let i=0;i<trackCount;i++){
-        if(!state.mixer.trackNames[i]) state.mixer.trackNames[i] = `Track ${i+1}`;
-    }
-
-    wrap.innerHTML = '';
-
-    for(let i=0;i<trackCount;i++){
-        const ch = document.createElement('div');
-        ch.className = 'mixerChannel';
-
-        const title = document.createElement('div');
-        title.className = 'chTitle';
-        title.textContent = state.mixer.trackNames[i];
-
-        const row1 = document.createElement('div');
-        row1.className = 'chRow';
-
-        const muteBtn = document.createElement('button');
-        muteBtn.className = 'mixerBtnSmall' + (state.mixer.mutes[i] ? ' active' : '');
-        muteBtn.textContent = 'M';
-        muteBtn.title = 'Mute';
-        muteBtn.onclick = ()=>{
-            state.mixer.mutes[i] = !state.mixer.mutes[i];
-            applyMixerStateToNodes();
-            renderMixerChannels();
-        };
-
-        const soloBtn = document.createElement('button');
-        soloBtn.className = 'mixerBtnSmall' + (state.mixer.solos[i] ? ' active' : '');
-        soloBtn.textContent = 'S';
-        soloBtn.title = 'Solo';
-        soloBtn.onclick = ()=>{
-            state.mixer.solos[i] = !state.mixer.solos[i];
-            applyMixerStateToNodes();
-            renderMixerChannels();
-        };
-
-        row1.appendChild(muteBtn);
-        row1.appendChild(soloBtn);
-
-        const sliderWrap = document.createElement('div');
-        sliderWrap.className = 'mixerSliderWrap';
-
-        // Level meter (behind fader)
-        const meter = document.createElement('div');
-        meter.className = 'mixerMeter';
-        const meterFill = document.createElement('div');
-        meterFill.className = 'mixerMeterFill';
-        meter.appendChild(meterFill);
-
-        const meterDb = document.createElement('div');
-        meterDb.className = 'mixerMeterDb';
-        meterDb.textContent = '-∞';
-
-        // stash refs for animation updates
-        state._mixerUi = state._mixerUi || { meterFills: [], meterDbs: [] };
-        state._mixerUi.meterFills[i] = meterFill;
-        state._mixerUi.meterDbs[i] = meterDb;
-
-        const fader = document.createElement('input');
-        fader.type = 'range';
-        fader.min = '0';
-        fader.max = '1.25';
-        fader.step = '0.01';
-        fader.value = String(state.mixer.volumes[i]);
-        fader.className = 'mixerFader';
-        fader.oninput = ()=>{
-            state.mixer.volumes[i] = parseFloat(fader.value);
-            applyMixerStateToNodes();
-        };
-
-        sliderWrap.appendChild(meter);
-        sliderWrap.appendChild(fader);
-        sliderWrap.appendChild(meterDb);
-
-        const panLabel = document.createElement('div');
-        panLabel.className = 'mixerLabelSmall';
-        panLabel.textContent = 'PAN';
-
-        const pan = document.createElement('input');
-        pan.type = 'range';
-        pan.min = '-1';
-        pan.max = '1';
-        pan.step = '0.01';
-        pan.value = String(state.mixer.pans[i]);
-        pan.className = 'mixerKnob';
-        pan.oninput = ()=>{
-            state.mixer.pans[i] = parseFloat(pan.value);
-            applyMixerStateToNodes();
-        };
-
-        ch.appendChild(title);
-        ch.appendChild(row1);
-        ch.appendChild(sliderWrap);
-        ch.appendChild(panLabel);
-        ch.appendChild(pan);
-
-        wrap.appendChild(ch);
-    }
-}
-
-// Expose for inline HTML onclick handlers
-window.openMixerWindow = openMixerWindow;
-window.closeMixerWindow = closeMixerWindow;
-
 
 window.addEventListener('load', init);
