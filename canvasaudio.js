@@ -1,7 +1,7 @@
 
 // --- APP VERSION ---
 const APP_STAGE = "Alpha";
-const APP_VERSION = "0.2.4";
+const APP_VERSION = "0.2.7";
 
 const APP_BUILD = "1";
 // --- CONSTANTS ---
