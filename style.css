@@ -214,3 +214,54 @@ button#stop-btn:hover { background: #d32f2f; }
   color:#fff;
   cursor:pointer;
 }
+
+
+/* --- Mixer + Track Controls --- */
+#mixer-btn{ margin-left:6px; }
+
+.track-controls{ display:flex; gap:6px; align-items:center; }
+.track-arm-btn, .track-input-btn{ width:22px; height:22px; border-radius:4px; border:1px solid #222; background:#101010; color:#ddd; display:flex; align-items:center; justify-content:center; cursor:pointer; }
+.track-arm-btn{ border-radius:50%; border:2px solid #8a2a2a; }
+.track-arm-btn.armed{ background:#c11; border-color:#ff4a4a; box-shadow:0 0 6px rgba(255,60,60,0.65); }
+.track-input-btn{ border-radius:4px; }
+.track-input-btn.selected{ background:#2a4b7a; border-color:#5aa3ff; }
+
+.overlay{ position:fixed; left:0; top:0; right:0; bottom:0; background:rgba(0,0,0,0.45); z-index:2000; display:flex; align-items:center; justify-content:center; }
+.modal{ background:#1a1a1a; border:1px solid #333; border-radius:10px; min-width:320px; max-width:90vw; max-height:80vh; overflow:auto; box-shadow:0 10px 30px rgba(0,0,0,0.6); }
+.modal-header{ display:flex; justify-content:space-between; align-items:center; padding:10px 12px; border-bottom:1px solid #333; font-weight:bold; }
+.modal-close{ background:#2b2b2b; color:#fff; border:1px solid #444; border-radius:6px; width:34px; height:30px; cursor:pointer; }
+.modal-body{ padding:12px; }
+
+.mixer-modal{ width:min(960px, 92vw); }
+.mixer-grid{ display:flex; gap:12px; overflow-x:auto; padding-bottom:8px; }
+.mixer-strip{ width:130px; background:#151515; border:1px solid #2c2c2c; border-radius:12px; padding:10px; }
+.mixer-strip .strip-title{ font-size:12px; opacity:0.85; margin-bottom:8px; }
+.mixer-strip .strip-btns{ display:flex; gap:8px; margin-bottom:10px; }
+.mixer-strip .strip-btn{ flex:1; background:#202020; border:1px solid #333; color:#eee; border-radius:8px; padding:6px 0; cursor:pointer; }
+.mixer-strip .strip-btn.active{ background:#2a4b7a; border-color:#5aa3ff; }
+
+.vert-meter{ position:relative; height:240px; width:32px; background:#0c0c0c; border:1px solid #333; border-radius:10px; margin:10px auto 8px auto; overflow:hidden; }
+.vert-meter .meter-fill{ position:absolute; left:0; right:0; bottom:0; height:0%; background:linear-gradient(#61ff61,#ffee61,#ff6161); }
+.vert-meter input[type=range]{ position:absolute; left:-104px; top:104px; width:240px; transform:rotate(-90deg); opacity:0.95; }
+
+.pan-row{ display:flex; align-items:center; gap:8px; margin-top:6px; }
+.pan-row .pan-label{ width:40px; font-size:11px; opacity:0.8; }
+.pan-row input[type=range]{ flex:1; }
+
+.input-modal{ width:min(520px, 92vw); }
+.input-item{ display:flex; justify-content:space-between; align-items:center; gap:10px; padding:10px; border:1px solid #2e2e2e; border-radius:10px; background:#131313; margin-bottom:10px; }
+.input-item button{ background:#2a2a2a; border:1px solid #3a3a3a; color:#eee; padding:6px 10px; border-radius:8px; cursor:pointer; }
+.input-item button.primary{ background:#2a4b7a; border-color:#5aa3ff; }
+
+#version-label {
+  /* Dark gray with 50% transparency */
+  background-color: rgba(128, 128, 128, 0.5); 
+  
+  /* Reduces text size (default is usually 16px) */
+  font-size: 0.85rem; 
+  
+  /* Optional: adds some space around the text so it's not cramped */
+  padding: 4px 8px;
+  border-radius: 4px;
+  display: inline-block;
+}

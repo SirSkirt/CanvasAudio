@@ -116,6 +116,140 @@ async function forceUpdateReload(remote) {
 }
 
 // --- INITIALIZATION ---
+
+
+// --- Mixer Window ---
+function openMixerWindow(){
+    const ov = document.getElementById('mixerOverlay');
+    const body = document.getElementById('mixerBody');
+    if(!ov || !body) return;
+    ov.style.display = 'flex';
+    renderMixerUI();
+}
+function closeMixerWindow(){
+    const ov = document.getElementById('mixerOverlay');
+    if(ov) ov.style.display = 'none';
+}
+
+function ensureMixerState(){
+    state.mixer = state.mixer || {
+        enabled:true,
+        trackNames: Array.from({length:8}, (_,i)=>`Track ${i+1}`),
+        volumes: Array(8).fill(1),
+        pans: Array(8).fill(0),
+        mutes: Array(8).fill(false),
+        solos: Array(8).fill(false)
+    };
+}
+
+function renderMixerUI(){
+    ensureMixerState();
+    const body = document.getElementById('mixerBody');
+    if(!body) return;
+    body.innerHTML = '';
+    const grid = document.createElement('div');
+    grid.className = 'mixer-grid';
+    for(let i=0;i<8;i++){
+        const strip = document.createElement('div');
+        strip.className = 'mixer-strip';
+        const title = document.createElement('div');
+        title.className = 'strip-title';
+        title.textContent = state.mixer.trackNames[i] || `Track ${i+1}`;
+        strip.appendChild(title);
+
+        const btns = document.createElement('div');
+        btns.className = 'strip-btns';
+        const mBtn = document.createElement('button');
+        mBtn.className = 'strip-btn'+(state.mixer.mutes[i]?' active':'');
+        mBtn.textContent='M';
+        mBtn.onclick=()=>{ state.mixer.mutes[i]=!state.mixer.mutes[i]; renderMixerUI(); };
+        const sBtn = document.createElement('button');
+        sBtn.className = 'strip-btn'+(state.mixer.solos[i]?' active':'');
+        sBtn.textContent='S';
+        sBtn.onclick=()=>{ state.mixer.solos[i]=!state.mixer.solos[i]; renderMixerUI(); };
+        btns.appendChild(mBtn); btns.appendChild(sBtn);
+        strip.appendChild(btns);
+
+        const meter = document.createElement('div');
+        meter.className = 'vert-meter';
+        const fill = document.createElement('div');
+        fill.className = 'meter-fill';
+        fill.style.height = '0%';
+        meter.appendChild(fill);
+        const vol = document.createElement('input');
+        vol.type='range';
+        vol.min='0'; vol.max='1'; vol.step='0.01';
+        vol.value=String(state.mixer.volumes[i] ?? 1);
+        vol.oninput=(e)=>{ state.mixer.volumes[i]=parseFloat(e.target.value); };
+        meter.appendChild(vol);
+        strip.appendChild(meter);
+
+        const panRow = document.createElement('div');
+        panRow.className='pan-row';
+        const panLab=document.createElement('div');
+        panLab.className='pan-label';
+        panLab.textContent='PAN';
+        const pan=document.createElement('input');
+        pan.type='range';
+        pan.min='-1'; pan.max='1'; pan.step='0.01';
+        pan.value=String(state.mixer.pans[i] ?? 0);
+        pan.oninput=(e)=>{ state.mixer.pans[i]=parseFloat(e.target.value); };
+        panRow.appendChild(panLab);
+        panRow.appendChild(pan);
+        strip.appendChild(panRow);
+
+        grid.appendChild(strip);
+    }
+    body.appendChild(grid);
+}
+
+// --- Track Input Menu ---
+async function openTrackInputMenu(trackIndex){
+    const ov = document.getElementById('inputMenuOverlay');
+    const body = document.getElementById('inputMenuBody');
+    if(!ov || !body) return;
+    ov.style.display='flex';
+    body.innerHTML = '<div style="opacity:0.85; font-size:12px; margin-bottom:10px;">Select an input device for this track (WIP).</div>';
+
+    let devices=[];
+    try{
+        const all = await navigator.mediaDevices.enumerateDevices();
+        devices = all.filter(d=>d.kind==='audioinput');
+    }catch(e){
+        devices=[];
+    }
+    if(devices.length===0){
+        const item=document.createElement('div');
+        item.className='input-item';
+        item.innerHTML='<div>No input devices found (or permission not granted yet).</div>';
+        const btn=document.createElement('button');
+        btn.textContent='Close';
+        btn.onclick=closeTrackInputMenu;
+        item.appendChild(btn);
+        body.appendChild(item);
+        return;
+    }
+
+    devices.forEach(d=>{
+        const item=document.createElement('div');
+        item.className='input-item';
+        const left=document.createElement('div');
+        left.textContent=d.label || 'Audio Input';
+        const btn=document.createElement('button');
+        const selected = state.trackInputDeviceId?.[trackIndex]===d.deviceId;
+        btn.className = selected ? 'primary' : '';
+        btn.textContent = selected ? 'Selected' : 'Select';
+        btn.onclick=()=>{ state.trackInputDeviceId[trackIndex]=d.deviceId; closeTrackInputMenu(); renderPlaylistTracks(); };
+        item.appendChild(left); item.appendChild(btn);
+        body.appendChild(item);
+    });
+}
+function closeTrackInputMenu(){
+    const ov = document.getElementById('inputMenuOverlay');
+    if(ov) ov.style.display='none';
+}
+
+
 function init() {
             // Version label (UI)
             const vEl = document.getElementById('version-label');
