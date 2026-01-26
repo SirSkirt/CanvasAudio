@@ -1,6 +1,3 @@
-
-
-
 // --- Track FX (Plugins) ---
 function ensureTrackFx(trackIndex){
   if(!state.trackFx[trackIndex]){
