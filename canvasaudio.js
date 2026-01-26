@@ -25,7 +25,10 @@ let state = {
     playlist: [], 
     trackFx: [],
     trackPlugins: [],
-,
+    trackArm: Array(8).fill(false),
+    trackInput: Array(8).fill('Default'),
+    availableInputs: ['Default'],
+
   mixer: {
     enabled: true,
     trackNames: Array.from({length: 8}, (_,i)=>`Track ${i+1}`),
@@ -188,14 +191,7 @@ function generateRuler() {
     const ruler = document.getElementById('ruler');
     ruler.innerHTML = ''; // Clear prev
     for(let i=1; i<=50; i++) {
-        const div = document.createElement('div');
-        div.className = 'ruler-segment';
-        div.innerText = i;
-        ruler.appendChild(div);
-    }
-}
-
-function renderPlaylist() {
+        const div = document.createElement('div')function renderPlaylist() {
     const container = document.getElementById('playlist-tracks');
     container.innerHTML = '';
 
@@ -205,7 +201,41 @@ function renderPlaylist() {
         
         const header = document.createElement('div');
         header.className = 'track-header';
-        header.innerText = `Track ${trackIndex + 1}`;
+
+        const name = document.createElement('div');
+        name.className = 'track-name';
+        name.innerText = `Track ${trackIndex + 1}`;
+        header.appendChild(name);
+
+        const controls = document.createElement('div');
+        controls.className = 'track-controls';
+
+        // Arm (record enable) toggle (UI only; routing comes later)
+        const armBtn = document.createElement('button');
+        armBtn.className = 'track-arm' + (state.trackArm && state.trackArm[trackIndex] ? ' armed' : '');
+        armBtn.title = (state.trackArm && state.trackArm[trackIndex]) ? 'Disarm track' : 'Arm track';
+        armBtn.type = 'button';
+        armBtn.onclick = (e) => {
+            e.stopPropagation();
+            if(!state.trackArm) state.trackArm = Array(trackCount).fill(false);
+            state.trackArm[trackIndex] = !state.trackArm[trackIndex];
+            renderPlaylist();
+        };
+        controls.appendChild(armBtn);
+
+        // Input selector (UI only)
+        const inputBtn = document.createElement('button');
+        inputBtn.className = 'track-input';
+        inputBtn.type = 'button';
+        inputBtn.title = 'Select input';
+        inputBtn.innerText = '🎤';
+        inputBtn.onclick = (e) => {
+            e.stopPropagation();
+            openTrackInputMenu(trackIndex, inputBtn);
+        };
+        controls.appendChild(inputBtn);
+
+        header.appendChild(controls);
         row.appendChild(header);
 
         const lane = document.createElement('div');
@@ -260,6 +290,60 @@ function renderPlaylist() {
             }
 
             lane.appendChild(el);
+        });
+
+        row.appendChild(lane);
+        container.appendChild(row);
+    });
+}
+
+// --- Track Input Menu (UI only) ---
+let _trackInputMenuEl = null;
+function closeTrackInputMenu(){
+    if(_trackInputMenuEl){
+        _trackInputMenuEl.remove();
+        _trackInputMenuEl = null;
+        document.removeEventListener('mousedown', _trackInputMenuOutsideHandler, true);
+    }
+}
+function _trackInputMenuOutsideHandler(e){
+    if(_trackInputMenuEl && !(_trackInputMenuEl.contains(e.target))){
+        closeTrackInputMenu();
+    }
+}
+function openTrackInputMenu(trackIndex, anchorEl){
+    closeTrackInputMenu();
+    const list = (state.availableInputs && state.availableInputs.length) ? state.availableInputs : ['Default'];
+    if(!state.trackInput) state.trackInput = Array(8).fill('Default');
+
+    const menu = document.createElement('div');
+    menu.className = 'track-input-menu';
+
+    list.forEach((name) => {
+        const item = document.createElement('div');
+        item.className = 'track-input-item' + (state.trackInput[trackIndex] === name ? ' selected' : '');
+        item.innerText = name;
+        item.onclick = (e) => {
+            e.stopPropagation();
+            state.trackInput[trackIndex] = name;
+            closeTrackInputMenu();
+            renderPlaylist();
+        };
+        menu.appendChild(item);
+    });
+
+    document.body.appendChild(menu);
+    _trackInputMenuEl = menu;
+
+    const r = anchorEl.getBoundingClientRect();
+    menu.style.left = Math.round(r.left) + 'px';
+    menu.style.top = Math.round(r.bottom + 6) + 'px';
+
+    setTimeout(() => {
+        document.addEventListener('mousedown', _trackInputMenuOutsideHandler, true);
+    }, 0);
+}
+lane.appendChild(el);
         });
 
         row.appendChild(lane);
