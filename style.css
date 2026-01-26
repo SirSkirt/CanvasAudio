@@ -149,3 +149,15 @@ button#stop-btn:hover { background: #d32f2f; }
 .step.active { background: #ddd; box-shadow: 0 0 8px var(--accent); }
 .step.playing { border: 2px solid var(--accent); transform: scale(1.1); }
 
+
+
+/* Version label (top center, subtle) */
+.version-label {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 12px;
+    color: #888;
+    pointer-events: none;
+    user-select: none;
+}
