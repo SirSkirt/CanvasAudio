@@ -26,7 +26,7 @@ let state = {
     mutes: Array(8).fill(false),
     solos: Array(8).fill(false)
   },
-  _mixerNodes: null
+  _mixerNodes: []
 };
 
 // Initialize 8 Tracks
