@@ -1,3 +1,8 @@
+
+// --- APP VERSION ---
+const APP_STAGE = "Alpha";
+const APP_VERSION = "0.2.4";
+
 // --- CONSTANTS ---
 const instruments = [
     { name: "Kick", note: "C1" }, 
@@ -54,6 +59,10 @@ let activeSources = [];
 
 // --- INITIALIZATION ---
 function init() {
+            // Version label (UI)
+            const vEl = document.getElementById('version-label');
+            if (vEl) vEl.textContent = `${APP_STAGE} Version ${APP_VERSION}`;
+
     generateRuler();
     renderResources();
     renderPlaylist();
