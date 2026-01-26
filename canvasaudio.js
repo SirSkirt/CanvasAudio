@@ -1,7 +1,7 @@
 // --- APP VERSION ---
 const APP_STAGE = "Alpha";
 const APP_VERSION = "0.3.0";
-
+const instruments = []
 let state = {
     isPlaying: false,
     mode: 'PATTERN', // 'PATTERN' | 'SONG'
