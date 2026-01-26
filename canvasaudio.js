@@ -18,7 +18,6 @@ let state = {
     playlist: [], 
     trackFx: [],
     trackPlugins: [],
-,
   mixer: {
     enabled: true,
     trackNames: Array.from({length: 8}, (_,i)=>`Track ${i+1}`),
