@@ -25,6 +25,7 @@ let state = {
     playlist: [], 
     trackFx: [],
     trackPlugins: [],
+,
   mixer: {
     enabled: true,
     trackNames: Array.from({length: 8}, (_,i)=>`Track ${i+1}`),
@@ -33,7 +34,7 @@ let state = {
     mutes: Array(8).fill(false),
     solos: Array(8).fill(false)
   },
-  _mixerNodes: []
+  _mixerNodes: null
 };
 
 // Initialize 8 Tracks
@@ -524,7 +525,7 @@ function clearCurrentPattern() {
 // Provides a simple internal mixer window (per-track volume/pan/mute/solo) and routes audio clips through track buses.
 
 function ensureMixerNodes(){
-    if(state._mixerNodes) return;
+    if(state._mixerNodes && state._mixerNodes.master && Array.isArray(state._mixerNodes.tracks) && state._mixerNodes.tracks.length===state.mixer.trackNames.length) return;
     const trackCount = state.playlist.length || 8;
 
     const master = new Tone.Gain(1).toDestination();
@@ -543,6 +544,7 @@ function ensureMixerNodes(){
 
 function getTrackInputNode(trackIndex){
     ensureMixerNodes();
+    if(!state._mixerNodes || !Array.isArray(state._mixerNodes.tracks)) ensureMixerNodes();
     const t = state._mixerNodes.tracks[Math.max(0, Math.min(trackIndex, state._mixerNodes.tracks.length-1))];
     // Future: insert FX chain before pan here.
     return t.pan;
