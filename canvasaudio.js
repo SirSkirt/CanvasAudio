@@ -18,6 +18,16 @@ let state = {
     playlist: [], 
     trackFx: [],
     trackPlugins: [],
+,
+  mixer: {
+    enabled: true,
+    trackNames: Array.from({length: 8}, (_,i)=>`Track ${i+1}`),
+    volumes: Array(8).fill(1),
+    pans: Array(8).fill(0),
+    mutes: Array(8).fill(false),
+    solos: Array(8).fill(false)
+  },
+  _mixerNodes: null
 };
 
 // Initialize 8 Tracks
@@ -56,6 +66,7 @@ function init() {
     renderPlaylist();
     renderChannelRack();
     selectResource('pattern', 'pat1');
+    initMixerUI();
     Tone.Transport.bpm.value = 128;
 }
 
@@ -431,7 +442,7 @@ Tone.Transport.scheduleRepeat((time) => {
         const currentBar = Math.floor(step / 16); // Assuming standard 4/4 grid logic for arrangement for now
         const stepInBar = step % 16;
 
-        state.playlist.forEach(track => {
+        state.playlist.forEach((track, trackIndex) => {
             track.forEach(clip => {
                 if(currentBar >= clip.startBar && currentBar < clip.startBar + clip.lengthBars) {
                     if(clip.type === 'pattern') {
@@ -443,7 +454,7 @@ Tone.Transport.scheduleRepeat((time) => {
                         }
                     } 
                     if(clip.type === 'audio' && currentBar === clip.startBar && stepInBar === 0) {
-                        playAudioClip(clip.id, time);
+                        playAudioClip(clip.id, time, trackIndex);
                     }
                 }
             });
@@ -473,7 +484,7 @@ function playPatternStep(grid, stepIdx, time) {
     }
 }
 
-function playAudioClip(id, time) {
+function playAudioClip(id, time, trackIndex = 0) {
     const clipData = state.audioClips[id];
     if(!clipData || !clipData.buffer) return;
 
@@ -500,5 +511,187 @@ function clearCurrentPattern() {
         renderChannelRack();
     }
 }
+
+
+
+// --- Mixer (Basic) ---
+// Provides a simple internal mixer window (per-track volume/pan/mute/solo) and routes audio clips through track buses.
+
+function ensureMixerNodes(){
+    if(state._mixerNodes) return;
+    const trackCount = state.playlist.length || 8;
+
+    const master = new Tone.Gain(1).toDestination();
+    const tracks = [];
+    for(let i=0;i<trackCount;i++){
+        const pan = new Tone.Panner(0);
+        const gain = new Tone.Gain(1);
+        pan.connect(gain);
+        gain.connect(master);
+        tracks.push({ pan, gain });
+    }
+
+    state._mixerNodes = { master, tracks };
+    applyMixerStateToNodes();
+}
+
+function getTrackInputNode(trackIndex){
+    ensureMixerNodes();
+    const t = state._mixerNodes.tracks[Math.max(0, Math.min(trackIndex, state._mixerNodes.tracks.length-1))];
+    // Future: insert FX chain before pan here.
+    return t.pan;
+}
+
+function applyMixerStateToNodes(){
+    if(!state._mixerNodes) return;
+
+    const anySolo = state.mixer?.solos?.some(Boolean);
+    const trackCount = state._mixerNodes.tracks.length;
+
+    for(let i=0;i<trackCount;i++){
+        const vol = (state.mixer?.volumes?.[i] ?? 1);
+        const panv = (state.mixer?.pans?.[i] ?? 0);
+        const muted = !!(state.mixer?.mutes?.[i]);
+        const solo = !!(state.mixer?.solos?.[i]);
+
+        const effectiveMuted = anySolo ? !solo : muted;
+
+        state._mixerNodes.tracks[i].gain.gain.value = effectiveMuted ? 0 : vol;
+        state._mixerNodes.tracks[i].pan.pan.value = panv;
+    }
+}
+
+function initMixerUI(){
+    // Avoid crash if HTML not present (e.g., older embeds)
+    if(!document.getElementById('mixerOverlay')) return;
+
+    // Close when clicking backdrop
+    document.getElementById('mixerOverlay').addEventListener('click', (e)=>{
+        if(e.target && e.target.id === 'mixerOverlay') closeMixerWindow();
+    });
+
+    // Initial render
+    renderMixerChannels();
+}
+
+function openMixerWindow(){
+    ensureMixerNodes();
+    const el = document.getElementById('mixerOverlay');
+    if(el) el.style.display = 'flex';
+    renderMixerChannels();
+}
+
+function closeMixerWindow(){
+    const el = document.getElementById('mixerOverlay');
+    if(el) el.style.display = 'none';
+}
+
+function renderMixerChannels(){
+    const wrap = document.getElementById('mixerChannels');
+    if(!wrap) return;
+
+    const trackCount = state.playlist.length || 8;
+    // Ensure state arrays have correct length
+    if(!state.mixer) state.mixer = {};
+    const ensureLen = (arr, def)=>{
+        if(!Array.isArray(arr)) arr = [];
+        while(arr.length < trackCount) arr.push(def);
+        if(arr.length > trackCount) arr = arr.slice(0, trackCount);
+        return arr;
+    };
+    state.mixer.trackNames = ensureLen(state.mixer.trackNames, '');
+    state.mixer.volumes = ensureLen(state.mixer.volumes, 1);
+    state.mixer.pans = ensureLen(state.mixer.pans, 0);
+    state.mixer.mutes = ensureLen(state.mixer.mutes, false);
+    state.mixer.solos = ensureLen(state.mixer.solos, false);
+
+    // Fill default names if blank
+    for(let i=0;i<trackCount;i++){
+        if(!state.mixer.trackNames[i]) state.mixer.trackNames[i] = `Track ${i+1}`;
+    }
+
+    wrap.innerHTML = '';
+
+    for(let i=0;i<trackCount;i++){
+        const ch = document.createElement('div');
+        ch.className = 'mixerChannel';
+
+        const title = document.createElement('div');
+        title.className = 'chTitle';
+        title.textContent = state.mixer.trackNames[i];
+
+        const row1 = document.createElement('div');
+        row1.className = 'chRow';
+
+        const muteBtn = document.createElement('button');
+        muteBtn.className = 'mixerBtnSmall' + (state.mixer.mutes[i] ? ' active' : '');
+        muteBtn.textContent = 'M';
+        muteBtn.title = 'Mute';
+        muteBtn.onclick = ()=>{
+            state.mixer.mutes[i] = !state.mixer.mutes[i];
+            applyMixerStateToNodes();
+            renderMixerChannels();
+        };
+
+        const soloBtn = document.createElement('button');
+        soloBtn.className = 'mixerBtnSmall' + (state.mixer.solos[i] ? ' active' : '');
+        soloBtn.textContent = 'S';
+        soloBtn.title = 'Solo';
+        soloBtn.onclick = ()=>{
+            state.mixer.solos[i] = !state.mixer.solos[i];
+            applyMixerStateToNodes();
+            renderMixerChannels();
+        };
+
+        row1.appendChild(muteBtn);
+        row1.appendChild(soloBtn);
+
+        const sliderWrap = document.createElement('div');
+        sliderWrap.className = 'mixerSliderWrap';
+
+        const fader = document.createElement('input');
+        fader.type = 'range';
+        fader.min = '0';
+        fader.max = '1.25';
+        fader.step = '0.01';
+        fader.value = String(state.mixer.volumes[i]);
+        fader.className = 'mixerFader';
+        fader.oninput = ()=>{
+            state.mixer.volumes[i] = parseFloat(fader.value);
+            applyMixerStateToNodes();
+        };
+
+        sliderWrap.appendChild(fader);
+
+        const panLabel = document.createElement('div');
+        panLabel.className = 'mixerLabelSmall';
+        panLabel.textContent = 'PAN';
+
+        const pan = document.createElement('input');
+        pan.type = 'range';
+        pan.min = '-1';
+        pan.max = '1';
+        pan.step = '0.01';
+        pan.value = String(state.mixer.pans[i]);
+        pan.className = 'mixerKnob';
+        pan.oninput = ()=>{
+            state.mixer.pans[i] = parseFloat(pan.value);
+            applyMixerStateToNodes();
+        };
+
+        ch.appendChild(title);
+        ch.appendChild(row1);
+        ch.appendChild(sliderWrap);
+        ch.appendChild(panLabel);
+        ch.appendChild(pan);
+
+        wrap.appendChild(ch);
+    }
+}
+
+// Expose for inline HTML onclick handlers
+window.openMixerWindow = openMixerWindow;
+window.closeMixerWindow = closeMixerWindow;
+
 
 window.addEventListener('load', init);

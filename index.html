@@ -22,6 +22,7 @@
         <div class="btn-group">
             <button id="play-btn" onclick="togglePlay()"><i class="fas fa-play"></i></button>
             <button id="stop-btn" onclick="stopTransport()"><i class="fas fa-stop"></i></button>
+            <button id="mixer-btn" title="Mixer" onclick="openMixerWindow()"><i class="fas fa-sliders-h"></i></button>
         </div>
 
         <div class="transport-controls">
@@ -101,6 +102,20 @@
       <div class="fxwin-body" id="fxWinBody"></div>
     </div>
   </div>
+
+
+    <!-- Mixer Window -->
+    <div id="mixerOverlay" style="display:none;">
+        <div id="mixerWindow">
+            <div id="mixerTitleBar">
+                <span>Mixer</span>
+                <button id="mixerCloseBtn" onclick="closeMixerWindow()">×</button>
+            </div>
+            <div id="mixerBody">
+                <div id="mixerChannels"></div>
+            </div>
+        </div>
+    </div>
 
 </body>
 </html>
