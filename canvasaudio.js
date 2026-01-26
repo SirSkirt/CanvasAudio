@@ -693,25 +693,39 @@ function playPatternStep(grid, stepIdx, time) {
 }
 
 function playAudioClip(id, time) {
-    const clipData = state.audioClips[id];
-    if(!clipData || !clipData.buffer) return;
+            const clipData = state.audioClips[id];
+            if (!clipData) return;
 
-    try {
-        const source = new Tone.BufferSource({
-            buffer: clipData.buffer
-        }).toDestination();
-        
-        source.start(time);
-        activeSources.push(source);
-        
-        source.onended = () => {
-            const index = activeSources.indexOf(source);
-            if (index > -1) activeSources.splice(index, 1);
-        };
-    } catch (e) {
-        console.error("Audio playback error:", e);
-    }
-}
+            // Accept either a raw AudioBuffer (clipData.buffer) or Tone.Buffer (clipData.toneBuffer)
+            const rawBuffer = clipData.buffer && (clipData.buffer.getChannelData ? clipData.buffer : null);
+
+            if (!rawBuffer) return;
+
+            try {
+                const ctx = Tone.context.rawContext;
+
+                // Schedule in AudioContext time using Tone's scheduled time
+                const when = (typeof time === "number") ? time : ctx.currentTime;
+
+                const src = ctx.createBufferSource();
+                src.buffer = rawBuffer;
+
+                // Destination: connect directly to raw destination to avoid Tone wrapper issues in iframes/PWA
+                src.connect(ctx.destination);
+
+                src.start(when);
+
+                // Track active sources so Stop works
+                activeSources.push(src);
+
+                src.onended = () => {
+                    const i = activeSources.indexOf(src);
+                    if (i > -1) activeSources.splice(i, 1);
+                };
+            } catch (e) {
+                console.error("Audio playback error:", e);
+            }
+        }
 
 function clearCurrentPattern() {
     if(state.selectedResType === 'pattern') {
