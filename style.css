@@ -151,13 +151,51 @@ button#stop-btn:hover { background: #d32f2f; }
 
 
 
-/* Version label (top center, subtle) */
-.version-label {
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    font-size: 12px;
-    color: #888;
-    pointer-events: none;
-    user-select: none;
+/* Version label + update banner */
+.toolbar { position: relative; }
+
+.version-label{
+  position:absolute;
+  left:50%;
+  transform:translateX(-50%);
+  top:50%;
+  transform:translate(-50%,-50%);
+  font-size:12px;
+  font-weight:600;
+  color:#8a8a8a;
+  letter-spacing:0.5px;
+  pointer-events:none;
+  white-space:nowrap;
+  opacity:0.95;
 }
+
+.update-banner{
+  position:fixed;
+  top:50px;
+  left:0;
+  right:0;
+  z-index:9999;
+  display:flex;
+  gap:10px;
+  align-items:center;
+  justify-content:center;
+  padding:8px 12px;
+  background:#2b2b2b;
+  border-bottom:1px solid #000;
+  color:#e0e0e0;
+  font-size:13px;
+}
+
+.update-banner button{
+  padding:4px 10px;
+  border-radius:4px;
+  background:#444;
+  color:#fff;
+  border:1px solid #333;
+  cursor:pointer;
+  font-weight:600;
+}
+
+.update-banner button:hover{ background:#ff9800; color:#000; }
+
+.hidden{ display:none !important; }

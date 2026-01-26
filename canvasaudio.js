@@ -1,7 +1,9 @@
+
 // --- APP VERSION ---
 const APP_STAGE = "Alpha";
-const APP_VERSION = "0.2.6";
+const APP_VERSION = "0.2.4";
 
+const APP_BUILD = "1";
 // --- CONSTANTS ---
 const instruments = [
     { name: "Kick", note: "C1" }, 
@@ -56,8 +58,60 @@ clapSynth.volume.value = -10;
 
 let activeSources = [];
 
+
+// --- UPDATE CHECKER ---
+function setupUpdateChecker() {
+    const banner = document.getElementById('update-banner');
+    const textEl = document.getElementById('update-text');
+    const btn = document.getElementById('update-reload');
+    if (!banner || !textEl || !btn) return;
+
+    const check = async () => {
+        try {
+            const res = await fetch(`version.json?ts=${Date.now()}`, { cache: 'no-store' });
+            if (!res.ok) return;
+            const data = await res.json();
+            if (!data || !data.version) return;
+
+            if (data.version !== APP_VERSION) {
+                textEl.textContent = `Update available (${data.version}).`;
+                banner.classList.remove('hidden');
+                btn.onclick = () => forceUpdateReload(data);
+            }
+        } catch (e) {}
+    };
+
+    check();
+    setInterval(check, 60000);
+}
+
+async function forceUpdateReload(remote) {
+    try {
+        if ('serviceWorker' in navigator) {
+            const reg = await navigator.serviceWorker.getRegistration();
+            if (reg) await reg.update();
+        }
+        if (window.caches) {
+            const keys = await caches.keys();
+            await Promise.all(keys.map((k) => caches.delete(k)));
+        }
+    } catch (e) {}
+
+    const v = remote && (remote.build || remote.version) ? (remote.build || remote.version) : String(Date.now());
+    const url = new URL(window.location.href);
+    url.searchParams.set('v', v);
+    url.searchParams.set('t', String(Date.now()));
+    window.location.replace(url.toString());
+}
+
 // --- INITIALIZATION ---
 function init() {
+            // Version label (UI)
+            const vEl = document.getElementById('version-label');
+            if (vEl) vEl.textContent = `${APP_STAGE} Version ${APP_VERSION}`;
+
+    setupUpdateChecker();
+
     generateRuler();
     renderResources();
     renderPlaylist();
@@ -485,19 +539,15 @@ function playAudioClip(id, time) {
     if(!clipData || !clipData.buffer) return;
 
     try {
-        // Use native WebAudio playback for user-imported buffers (avoids Tone buffer "not loaded" errors)
-        const ctx = Tone.context.rawContext;
-        const src = ctx.createBufferSource();
-        src.buffer = clipData.buffer;
-
-        // Direct to output (keep it simple and reliable inside iframes/PWA)
-        src.connect(ctx.destination);
-
-        src.start(time);
-        activeSources.push(src);
-
-        src.onended = () => {
-            const index = activeSources.indexOf(src);
+        const source = new Tone.BufferSource({
+            buffer: clipData.buffer
+        }).toDestination();
+        
+        source.start(time);
+        activeSources.push(source);
+        
+        source.onended = () => {
+            const index = activeSources.indexOf(source);
             if (index > -1) activeSources.splice(index, 1);
         };
     } catch (e) {
