@@ -22,6 +22,7 @@
         <div class="btn-group">
             <button id="play-btn" onclick="togglePlay()"><i class="fas fa-play"></i></button>
             <button id="stop-btn" onclick="stopTransport()"><i class="fas fa-stop"></i></button>
+            <button id="record-btn" onclick="toggleRecord()" title="Record"><i class="fas fa-circle"></i></button>
         </div>
 
         <div class="transport-controls">
@@ -90,6 +91,6 @@
 
     <input type="file" id="audio-upload" accept="audio/*" style="display:none;" onchange="handleAudioUpload(this)">
 
-    <script src="canvasaudio.js"v?=027></script>
+    <script src="canvasaudio.js"></script>
 </body>
 </html>

@@ -1,7 +1,7 @@
 
 // --- APP VERSION ---
 const APP_STAGE = "Alpha";
-const APP_VERSION = "0.2.7";
+const APP_VERSION = "0.2.4";
 
 const APP_BUILD = "1";
 // --- CONSTANTS ---
@@ -19,6 +19,15 @@ let state = {
     bpm: 128,
     currentStep: 0,
     timeSig: 4, // 4 beats per bar
+
+    // Recording
+    armedTrack: 0,
+    isRecording: false,
+    mediaStream: null,
+    mediaRecorder: null,
+    recordingClipId: null,
+    recordingStartPerf: 0,
+    recordingTimer: null,
     
     patterns: { 'pat1': { id:'pat1', name: "Pattern 1", grid: createEmptyGrid(4) } },
     audioClips: {}, 
@@ -248,7 +257,12 @@ function renderPlaylist() {
         
         const header = document.createElement('div');
         header.className = 'track-header';
-        header.innerText = `Track ${trackIndex + 1}`;
+        header.innerHTML = `
+            <button class="arm-btn ${state.armedTrack === trackIndex ? 'active' : ''}" onclick="setArmedTrack(${trackIndex})" title="Arm Track">
+                <i class="fas fa-circle"></i>
+            </button>
+            Track ${trackIndex + 1}
+        `;
         row.appendChild(header);
 
         const lane = document.createElement('div');
@@ -291,7 +305,13 @@ function renderPlaylist() {
                 canvas.width = width;
                 canvas.height = 56;
                 el.appendChild(canvas);
-                drawWaveform(state.audioClips[clip.id].buffer, canvas);
+                const clipData = state.audioClips[clip.id];
+                if (clipData.buffer) {
+                    drawWaveform(clipData.buffer, canvas);
+                } else if (clipData.isRecording) {
+                    el.classList.add('clip-recording');
+                    drawRecordingPlaceholder(canvas);
+                }
             } else if (clip.type === 'pattern') {
                  const gridDiv = document.createElement('div');
                  gridDiv.style.width = '100%';
@@ -308,6 +328,19 @@ function renderPlaylist() {
         row.appendChild(lane);
         container.appendChild(row);
     });
+}
+
+function drawRecordingPlaceholder(canvas) {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = 'rgba(229,57,53,0.15)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = 'rgba(229,57,53,0.9)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(2, canvas.height/2);
+    ctx.lineTo(canvas.width-2, canvas.height/2);
+    ctx.stroke();
 }
 
 function addClipToTrack(trackIndex, startBar) {
@@ -454,6 +487,131 @@ function stopTransport() {
     
     document.querySelectorAll('.step.playing').forEach(s => s.classList.remove('playing'));
     document.getElementById('playhead').style.left = '120px';
+}
+
+function setArmedTrack(trackIndex) {
+    state.armedTrack = Math.max(0, Math.min(state.playlist.length - 1, trackIndex));
+    renderPlaylist();
+}
+
+async function toggleRecord() {
+    if(state.isRecording) {
+        stopRecording();
+    } else {
+        await startRecording();
+    }
+}
+
+async function startRecording() {
+    if(state.mode !== 'SONG') {
+        alert('Recording is only available in SONG mode.');
+        return;
+    }
+
+    if (Tone.context.state !== 'running') {
+        await Tone.start();
+    }
+
+    // Request mic
+    try {
+        state.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+        alert('Microphone permission denied.');
+        return;
+    }
+
+    const clipId = 'rec_' + Date.now();
+    state.recordingClipId = clipId;
+    state.recordingStartPerf = performance.now();
+
+    // Create placeholder clip data
+    state.audioClips[clipId] = {
+        name: 'Recording...',
+        buffer: null,
+        url: null,
+        isRecording: true
+    };
+
+    // Place clip at current playhead position
+    const startBar = Math.floor(state.currentStep / 16);
+    const track = state.playlist[state.armedTrack] || state.playlist[0];
+    if(!state.playlist[state.armedTrack]) state.playlist[state.armedTrack] = track;
+
+    track.push({ type: 'audio', id: clipId, startBar, lengthBars: 1 });
+    renderPlaylist();
+
+    // Start recorder
+    const chunks = [];
+    state.mediaRecorder = new MediaRecorder(state.mediaStream);
+    state.mediaRecorder.ondataavailable = (ev) => { if(ev.data && ev.data.size) chunks.push(ev.data); };
+    state.mediaRecorder.onstop = async () => {
+        try {
+            const blob = new Blob(chunks, { type: state.mediaRecorder.mimeType || 'audio/webm' });
+            const arrayBuffer = await blob.arrayBuffer();
+            const decoded = await Tone.context.rawContext.decodeAudioData(arrayBuffer);
+            state.audioClips[clipId].buffer = decoded;
+            state.audioClips[clipId].name = 'Recorded Audio';
+            state.audioClips[clipId].isRecording = false;
+
+            // Finalize length
+            const secondsPerBar = (60 / state.bpm) * state.timeSig;
+            const finalBars = Math.max(1, Math.ceil(decoded.duration / secondsPerBar));
+            const t = state.playlist[state.armedTrack] || [];
+            const item = t.find(c => c.id === clipId);
+            if(item) item.lengthBars = finalBars;
+        } catch (e) {
+            console.error('Recording decode failed:', e);
+            alert('Recording failed to decode.');
+            delete state.audioClips[clipId];
+        }
+
+        renderPlaylist();
+        cleanupRecordingStream();
+    };
+
+    state.mediaRecorder.start();
+    state.isRecording = true;
+    document.getElementById('record-btn')?.classList.add('recording');
+
+    // Grow the clip in real-time (FL-style)
+    state.recordingTimer = setInterval(() => {
+        const elapsed = (performance.now() - state.recordingStartPerf) / 1000;
+        const secondsPerBar = (60 / state.bpm) * state.timeSig;
+        const bars = Math.max(1, Math.ceil(elapsed / secondsPerBar));
+        const t = state.playlist[state.armedTrack] || [];
+        const item = t.find(c => c.id === clipId);
+        if(item) {
+            item.lengthBars = bars;
+            renderPlaylist();
+        }
+    }, 200);
+}
+
+function stopRecording() {
+    if(!state.isRecording) return;
+
+    state.isRecording = false;
+    document.getElementById('record-btn')?.classList.remove('recording');
+
+    if(state.recordingTimer) {
+        clearInterval(state.recordingTimer);
+        state.recordingTimer = null;
+    }
+
+    try {
+        state.mediaRecorder?.stop();
+    } catch(e) {
+        cleanupRecordingStream();
+    }
+}
+
+function cleanupRecordingStream() {
+    try {
+        state.mediaStream?.getTracks()?.forEach(t => t.stop());
+    } catch(e) {}
+    state.mediaStream = null;
+    state.mediaRecorder = null;
+    state.recordingClipId = null;
 }
 
 // --- CLOCK ---
