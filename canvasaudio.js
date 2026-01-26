@@ -28,6 +28,13 @@ let state = {
     mediaStream: null,
     mediaRecorder: null,
     recordingClipId: null,
+
+    // Per-track input selection (deviceId from enumerateDevices)
+    trackInputDeviceIds: Array(8).fill(null),
+
+    // Track FX slots (UI only for now)
+    trackFxSlots: Array.from({length: 8}, () => Array(10).fill(null)),
+    trackFxSlotEnabled: Array.from({length: 8}, () => Array(10).fill(true)),
     recordingStartPerf: 0,
     recordingTimer: null,
     
@@ -424,6 +431,161 @@ function selectResource(type, id) {
     }
 }
 
+// --- Track Arm/Input/FX UI ---
+
+let _trackUiStyleInjected = false;
+function ensureTrackUiStyles(){
+    if(_trackUiStyleInjected) return;
+    _trackUiStyleInjected = true;
+    const style = document.createElement('style');
+    style.textContent = `
+        .track-buttons{ display:flex; gap:6px; align-items:center; margin-top:6px; }
+        .track-btn{ width:26px; height:20px; border-radius:4px; border:1px solid rgba(255,255,255,0.18); background:rgba(0,0,0,0.35); color:#ddd; display:flex; align-items:center; justify-content:center; cursor:pointer; }
+        .track-btn:hover{ background:rgba(255,255,255,0.08); }
+        .track-arm-ind{ width:12px; height:12px; border-radius:999px; border:2px solid rgba(255,70,70,0.9); background:rgba(0,0,0,0.1); }
+        .track-arm-ind.armed{ background:rgba(255,70,70,0.95); box-shadow:0 0 8px rgba(255,70,70,0.6); }
+        .track-mic{ font-size:13px; line-height:1; }
+        .track-fx{ font-size:12px; font-weight:700; letter-spacing:0.4px; }
+        /* FX window */
+        #fxOverlay{ position:fixed; inset:0; background:rgba(0,0,0,0.55); display:none; align-items:center; justify-content:center; z-index:9999; }
+        #fxWindow{ width:min(560px, 92vw); max-height:min(80vh, 720px); overflow:auto; background:#1f1f1f; border:1px solid rgba(255,255,255,0.14); border-radius:10px; box-shadow:0 16px 50px rgba(0,0,0,0.6); }
+        #fxHeader{ display:flex; justify-content:space-between; align-items:center; padding:12px 14px; border-bottom:1px solid rgba(255,255,255,0.10); font-weight:700; }
+        #fxBody{ padding:12px 14px 16px; }
+        .fxSlot{ display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid rgba(255,255,255,0.08); }
+        .fxSlot:last-child{ border-bottom:none; }
+        .fxSlotLabel{ width:64px; opacity:0.9; }
+        .fxSlotSelect{ flex:1; }
+        .fxSlotToggle{ width:22px; height:22px; border-radius:6px; border:1px solid rgba(255,255,255,0.18); background:rgba(0,0,0,0.35); color:#ddd; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+        .fxSlotToggle.off{ opacity:0.35; }
+        .fxSmall{ font-size:12px; opacity:0.75; margin-top:10px; }
+    `;
+    document.head.appendChild(style);
+
+    if(!document.getElementById('fxOverlay')){
+        const overlay = document.createElement('div');
+        overlay.id = 'fxOverlay';
+        overlay.innerHTML = `
+            <div id="fxWindow">
+                <div id="fxHeader">
+                    <div id="fxTitle">Track FX</div>
+                    <button id="fxClose" class="track-btn" style="width:28px;height:24px;">✕</button>
+                </div>
+                <div id="fxBody"></div>
+            </div>
+        `;
+        overlay.addEventListener('mousedown', (e)=>{ if(e.target === overlay) closeFxWindow(); });
+        document.body.appendChild(overlay);
+        document.getElementById('fxClose').onclick = closeFxWindow;
+    }
+}
+
+function openInputPicker(trackIndex){
+    // Mobile-friendly: simple prompt list.
+    if(!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices){
+        alert('Input selection not supported on this browser.');
+        return;
+    }
+    navigator.mediaDevices.enumerateDevices().then(devices=>{
+        const mics = devices.filter(d=>d.kind === 'audioinput');
+        if(!mics.length){
+            alert('No audio inputs found.');
+            return;
+        }
+        const current = state.trackInputDeviceIds?.[trackIndex] || '';
+        const lines = mics.map((d,i)=>`${i+1}) ${d.label || 'Microphone'}${d.deviceId===current?' (selected)':''}`);
+        const choice = prompt(`Select input for Track ${trackIndex+1}:\n` + lines.join('\n') + `\n\nEnter number 1-${mics.length} (cancel to keep current).`);
+        if(!choice) return;
+        const idx = parseInt(choice,10);
+        if(!Number.isFinite(idx) || idx < 1 || idx > mics.length) return;
+        if(!state.trackInputDeviceIds) state.trackInputDeviceIds = Array(8).fill(null);
+        state.trackInputDeviceIds[trackIndex] = mics[idx-1].deviceId;
+        renderPlaylist(); // refresh small tooltip/icons if needed
+    }).catch(()=>{
+        alert('Unable to enumerate audio devices. (Permission may be required)');
+    });
+}
+
+let _fxTrackIndex = null;
+function openFxWindow(trackIndex){
+    ensureTrackUiStyles();
+    _fxTrackIndex = trackIndex;
+
+    // ensure slots arrays
+    if(!state.trackFxSlots) state.trackFxSlots = Array.from({length: 8}, () => Array(10).fill(null));
+    if(!state.trackFxSlotEnabled) state.trackFxSlotEnabled = Array.from({length: 8}, () => Array(10).fill(true));
+
+    const overlay = document.getElementById('fxOverlay');
+    const title = document.getElementById('fxTitle');
+    const body  = document.getElementById('fxBody');
+    title.textContent = `Track FX — Track ${trackIndex+1}`;
+    body.innerHTML = '';
+
+    const pluginList = (window.CA_PLUGINS || []).slice();
+    const options = ['(empty)'].concat(pluginList.map(p=>p.name));
+
+    for(let i=0;i<10;i++){
+        const row = document.createElement('div');
+        row.className = 'fxSlot';
+
+        const label = document.createElement('div');
+        label.className = 'fxSlotLabel';
+        label.textContent = `Slot ${i+1}`;
+
+        const sel = document.createElement('select');
+        sel.className = 'fxSlotSelect';
+        options.forEach((name, idx)=>{
+            const opt = document.createElement('option');
+            opt.value = String(idx-1); // -1 = empty
+            opt.textContent = name;
+            sel.appendChild(opt);
+        });
+
+        const curId = state.trackFxSlots[trackIndex][i];
+        if(curId){
+            const pIdx = pluginList.findIndex(p=>p.id === curId);
+            sel.value = String(pIdx);
+        }else{
+            sel.value = "-1";
+        }
+
+        sel.onchange = ()=>{
+            const v = parseInt(sel.value,10);
+            if(v < 0){
+                state.trackFxSlots[trackIndex][i] = null;
+            }else{
+                state.trackFxSlots[trackIndex][i] = pluginList[v]?.id || null;
+            }
+        };
+
+        const tog = document.createElement('button');
+        tog.className = 'fxSlotToggle' + (state.trackFxSlotEnabled[trackIndex][i] ? '' : ' off');
+        tog.textContent = state.trackFxSlotEnabled[trackIndex][i] ? '●' : '○';
+        tog.onclick = ()=>{
+            state.trackFxSlotEnabled[trackIndex][i] = !state.trackFxSlotEnabled[trackIndex][i];
+            tog.className = 'fxSlotToggle' + (state.trackFxSlotEnabled[trackIndex][i] ? '' : ' off');
+            tog.textContent = state.trackFxSlotEnabled[trackIndex][i] ? '●' : '○';
+        };
+
+        row.appendChild(label);
+        row.appendChild(sel);
+        row.appendChild(tog);
+        body.appendChild(row);
+    }
+
+    const note = document.createElement('div');
+    note.className = 'fxSmall';
+    note.textContent = 'FX slots are UI-only for now; audio routing will be wired to these slots in the next step.';
+    body.appendChild(note);
+
+    overlay.style.display = 'flex';
+}
+
+function closeFxWindow(){
+    const overlay = document.getElementById('fxOverlay');
+    if(overlay) overlay.style.display = 'none';
+    _fxTrackIndex = null;
+}
+
 function renderResources() {
     const patList = document.getElementById('pattern-list');
     patList.innerHTML = '';
@@ -464,6 +626,7 @@ function generateRuler() {
 
 function renderPlaylist() {
     const container = document.getElementById('playlist-tracks');
+    ensureTrackUiStyles();
     container.innerHTML = '';
 
     state.playlist.forEach((trackClips, trackIndex) => {
@@ -473,9 +636,17 @@ function renderPlaylist() {
         const header = document.createElement('div');
         header.className = 'track-header';
         header.innerHTML = `
-            <button class="arm-btn ${state.armedTrack === trackIndex ? 'active' : ''}" onclick="setArmedTrack(${trackIndex})" title="Arm Track">
-                <i class="fas fa-circle"></i>
-            </button>
+            <div class="track-buttons">
+                <button class="arm-btn ${state.armedTrack === trackIndex ? 'active' : ''}" onclick="setArmedTrack(${trackIndex})" title="Arm Track">
+                    <div class="track-arm-ind ${state.armedTrack === trackIndex ? 'armed' : ''}"></div>
+                </button>
+                <button class="track-btn input-btn" onclick="openInputPicker(${trackIndex})" title="Input">
+                    <span class="track-mic">🎤</span>
+                </button>
+                <button class="track-btn fx-btn" onclick="openFxWindow(${trackIndex})" title="FX">
+                    <span class="track-fx">FX</span>
+                </button>
+            </div>
             Track ${trackIndex + 1}
         `;
         row.appendChild(header);
@@ -714,6 +885,19 @@ async function toggleRecord() {
     }
 }
 
+
+function buildAudioConstraints(){
+    // If a track has a selected input device, request that specific device.
+    try{
+        const t = state.armedTrack;
+        const deviceId = (state.trackInputDeviceIds && t != null) ? state.trackInputDeviceIds[t] : null;
+        if(deviceId){
+            return { audio: { deviceId: { exact: deviceId } } };
+        }
+    }catch(e){}
+    return { audio: true };
+}
+
 async function startRecording() {
     await ensureAudioReady();
     if(state.mode !== 'SONG') {
@@ -722,7 +906,7 @@ async function startRecording() {
     }
 // Request mic
     try {
-        state.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        state.mediaStream = await navigator.mediaDevices.getUserMedia(buildAudioConstraints());
     } catch (e) {
         alert('Microphone permission denied.');
         return;
