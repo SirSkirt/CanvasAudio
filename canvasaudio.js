@@ -1,10 +1,113 @@
+/
 
-// --- APP VERSION ---
-const APP_STAGE = "Alpha";
-const APP_VERSION = "0.2.9";
 
-const APP_BUILD = "1";
-// --- CONSTANTS ---
+// --- Track FX (Plugins) ---
+function ensureTrackFx(trackIndex){
+  if(!state.trackFx[trackIndex]){
+    const input = new Tone.Gain(1);
+    const output = new Tone.Gain(1).toDestination();
+    input.connect(output);
+    state.trackFx[trackIndex] = { input, output, nodes: [], plugins: [] };
+    state.trackPlugins[trackIndex] = state.trackPlugins[trackIndex] || [];
+  }
+  return state.trackFx[trackIndex];
+}
+
+function rebuildTrackFxChain(trackIndex){
+  const fx = ensureTrackFx(trackIndex);
+  try{ fx.input.disconnect(); }catch(e){}
+  let cursor = fx.input;
+  // Connect through plugin nodes in order
+  fx.nodes.forEach(n=>{
+    try{ cursor.connect(n); }catch(e){}
+    cursor = n;
+  });
+  try{ cursor.connect(fx.output); }catch(e){}
+}
+
+function addPluginToTrack(trackIndex, pluginId){
+  const list = window.CA_PLUGINS || [];
+  const def = list.find(p=>p.id===pluginId);
+  if(!def) return null;
+  const fx = ensureTrackFx(trackIndex);
+  const inst = def.create({ trackIndex });
+  fx.nodes.push(inst.node);
+  fx.plugins.push(inst);
+  state.trackPlugins[trackIndex] = fx.plugins;
+  rebuildTrackFxChain(trackIndex);
+  return inst;
+}
+
+function openFxWindow(trackIndex){
+  const overlay = document.getElementById("fxOverlay");
+  const win = document.getElementById("fxWindow");
+  const title = document.getElementById("fxWinTitle");
+  const body = document.getElementById("fxWinBody");
+  const sel = document.getElementById("fxPluginSelect");
+  const addBtn = document.getElementById("fxAddPluginBtn");
+  const closeBtn = document.getElementById("fxCloseBtn");
+
+  if(!overlay || !win || !body || !sel || !addBtn || !closeBtn) return;
+
+  ensureTrackFx(trackIndex);
+
+  title.textContent = "Effects — Track " + (trackIndex+1);
+
+  // Populate plugin list
+  sel.innerHTML = "";
+  (window.CA_PLUGINS || []).forEach(p=>{
+    const opt = document.createElement("option");
+    opt.value = p.id;
+    opt.textContent = p.name;
+    sel.appendChild(opt);
+  });
+
+  function showPluginUI(inst){
+    if(inst && typeof inst.mountUI === "function"){
+      inst.mountUI(body);
+    }else{
+      body.innerHTML = "<div class='fxwin-note'>No UI for this effect.</div>";
+    }
+  }
+
+  addBtn.onclick = ()=>{
+    const pid = sel.value;
+    const inst = addPluginToTrack(trackIndex, pid);
+    showPluginUI(inst);
+  };
+
+  closeBtn.onclick = ()=>{
+    overlay.style.display = "none";
+  };
+
+  // Show latest plugin UI if exists, else blank
+  const fx = ensureTrackFx(trackIndex);
+  showPluginUI(fx.plugins[fx.plugins.length-1] || null);
+
+  overlay.style.display = "block";
+}
+
+function wireFxWindowDrag(){
+  const header = document.getElementById("fxWinHeader");
+  const win = document.getElementById("fxWindow");
+  if(!header || !win) return;
+  let dragging=false, ox=0, oy=0;
+
+  header.addEventListener("mousedown",(e)=>{
+    dragging=true;
+    const rect = win.getBoundingClientRect();
+    ox = e.clientX - rect.left;
+    oy = e.clientY - rect.top;
+    e.preventDefault();
+  });
+  window.addEventListener("mousemove",(e)=>{
+    if(!dragging) return;
+    win.style.left = (e.clientX - ox) + "px";
+    win.style.top = (e.clientY - oy) + "px";
+  });
+  window.addEventListener("mouseup",()=>{ dragging=false; });
+}
+/ --- CONSTANTS ---
 const instruments = [
     { name: "Kick", note: "C1" }, 
     { name: "Snare", note: "D1" }, 
@@ -19,15 +122,6 @@ let state = {
     bpm: 128,
     currentStep: 0,
     timeSig: 4, // 4 beats per bar
-
-    // Recording
-    armedTrack: 0,
-    isRecording: false,
-    mediaStream: null,
-    mediaRecorder: null,
-    recordingClipId: null,
-    recordingStartPerf: 0,
-    recordingTimer: null,
     
     patterns: { 'pat1': { id:'pat1', name: "Pattern 1", grid: createEmptyGrid(4) } },
     audioClips: {}, 
@@ -67,60 +161,8 @@ clapSynth.volume.value = -10;
 
 let activeSources = [];
 
-
-// --- UPDATE CHECKER ---
-function setupUpdateChecker() {
-    const banner = document.getElementById('update-banner');
-    const textEl = document.getElementById('update-text');
-    const btn = document.getElementById('update-reload');
-    if (!banner || !textEl || !btn) return;
-
-    const check = async () => {
-        try {
-            const res = await fetch(`version.json?ts=${Date.now()}`, { cache: 'no-store' });
-            if (!res.ok) return;
-            const data = await res.json();
-            if (!data || !data.version) return;
-
-            if (data.version !== APP_VERSION) {
-                textEl.textContent = `Update available (${data.version}).`;
-                banner.classList.remove('hidden');
-                btn.onclick = () => forceUpdateReload(data);
-            }
-        } catch (e) {}
-    };
-
-    check();
-    setInterval(check, 60000);
-}
-
-async function forceUpdateReload(remote) {
-    try {
-        if ('serviceWorker' in navigator) {
-            const reg = await navigator.serviceWorker.getRegistration();
-            if (reg) await reg.update();
-        }
-        if (window.caches) {
-            const keys = await caches.keys();
-            await Promise.all(keys.map((k) => caches.delete(k)));
-        }
-    } catch (e) {}
-
-    const v = remote && (remote.build || remote.version) ? (remote.build || remote.version) : String(Date.now());
-    const url = new URL(window.location.href);
-    url.searchParams.set('v', v);
-    url.searchParams.set('t', String(Date.now()));
-    window.location.replace(url.toString());
-}
-
 // --- INITIALIZATION ---
 function init() {
-            // Version label (UI)
-            const vEl = document.getElementById('version-label');
-            if (vEl) vEl.textContent = `${APP_STAGE} Version ${APP_VERSION}`;
-
-    setupUpdateChecker();
-
     generateRuler();
     renderResources();
     renderPlaylist();
@@ -257,12 +299,7 @@ function renderPlaylist() {
         
         const header = document.createElement('div');
         header.className = 'track-header';
-        header.innerHTML = `
-            <button class="arm-btn ${state.armedTrack === trackIndex ? 'active' : ''}" onclick="setArmedTrack(${trackIndex})" title="Arm Track">
-                <i class="fas fa-circle"></i>
-            </button>
-            Track ${trackIndex + 1}
-        `;
+        header.innerText = `Track ${trackIndex + 1}`;
         row.appendChild(header);
 
         const lane = document.createElement('div');
@@ -305,13 +342,7 @@ function renderPlaylist() {
                 canvas.width = width;
                 canvas.height = 56;
                 el.appendChild(canvas);
-                const clipData = state.audioClips[clip.id];
-                if (clipData.buffer) {
-                    drawWaveform(clipData.buffer, canvas);
-                } else if (clipData.isRecording) {
-                    el.classList.add('clip-recording');
-                    drawRecordingPlaceholder(canvas);
-                }
+                drawWaveform(state.audioClips[clip.id].buffer, canvas);
             } else if (clip.type === 'pattern') {
                  const gridDiv = document.createElement('div');
                  gridDiv.style.width = '100%';
@@ -328,19 +359,6 @@ function renderPlaylist() {
         row.appendChild(lane);
         container.appendChild(row);
     });
-}
-
-function drawRecordingPlaceholder(canvas) {
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = 'rgba(229,57,53,0.15)';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.strokeStyle = 'rgba(229,57,53,0.9)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(2, canvas.height/2);
-    ctx.lineTo(canvas.width-2, canvas.height/2);
-    ctx.stroke();
 }
 
 function addClipToTrack(trackIndex, startBar) {
@@ -489,131 +507,6 @@ function stopTransport() {
     document.getElementById('playhead').style.left = '120px';
 }
 
-function setArmedTrack(trackIndex) {
-    state.armedTrack = Math.max(0, Math.min(state.playlist.length - 1, trackIndex));
-    renderPlaylist();
-}
-
-async function toggleRecord() {
-    if(state.isRecording) {
-        stopRecording();
-    } else {
-        await startRecording();
-    }
-}
-
-async function startRecording() {
-    if(state.mode !== 'SONG') {
-        alert('Recording is only available in SONG mode.');
-        return;
-    }
-
-    if (Tone.context.state !== 'running') {
-        await Tone.start();
-    }
-
-    // Request mic
-    try {
-        state.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch (e) {
-        alert('Microphone permission denied.');
-        return;
-    }
-
-    const clipId = 'rec_' + Date.now();
-    state.recordingClipId = clipId;
-    state.recordingStartPerf = performance.now();
-
-    // Create placeholder clip data
-    state.audioClips[clipId] = {
-        name: 'Recording...',
-        buffer: null,
-        url: null,
-        isRecording: true
-    };
-
-    // Place clip at current playhead position
-    const startBar = Math.floor(state.currentStep / 16);
-    const track = state.playlist[state.armedTrack] || state.playlist[0];
-    if(!state.playlist[state.armedTrack]) state.playlist[state.armedTrack] = track;
-
-    track.push({ type: 'audio', id: clipId, startBar, lengthBars: 1 });
-    renderPlaylist();
-
-    // Start recorder
-    const chunks = [];
-    state.mediaRecorder = new MediaRecorder(state.mediaStream);
-    state.mediaRecorder.ondataavailable = (ev) => { if(ev.data && ev.data.size) chunks.push(ev.data); };
-    state.mediaRecorder.onstop = async () => {
-        try {
-            const blob = new Blob(chunks, { type: state.mediaRecorder.mimeType || 'audio/webm' });
-            const arrayBuffer = await blob.arrayBuffer();
-            const decoded = await Tone.context.rawContext.decodeAudioData(arrayBuffer);
-            state.audioClips[clipId].buffer = decoded;
-            state.audioClips[clipId].name = 'Recorded Audio';
-            state.audioClips[clipId].isRecording = false;
-
-            // Finalize length
-            const secondsPerBar = (60 / state.bpm) * state.timeSig;
-            const finalBars = Math.max(1, Math.ceil(decoded.duration / secondsPerBar));
-            const t = state.playlist[state.armedTrack] || [];
-            const item = t.find(c => c.id === clipId);
-            if(item) item.lengthBars = finalBars;
-        } catch (e) {
-            console.error('Recording decode failed:', e);
-            alert('Recording failed to decode.');
-            delete state.audioClips[clipId];
-        }
-
-        renderPlaylist();
-        cleanupRecordingStream();
-    };
-
-    state.mediaRecorder.start();
-    state.isRecording = true;
-    document.getElementById('record-btn')?.classList.add('recording');
-
-    // Grow the clip in real-time (FL-style)
-    state.recordingTimer = setInterval(() => {
-        const elapsed = (performance.now() - state.recordingStartPerf) / 1000;
-        const secondsPerBar = (60 / state.bpm) * state.timeSig;
-        const bars = Math.max(1, Math.ceil(elapsed / secondsPerBar));
-        const t = state.playlist[state.armedTrack] || [];
-        const item = t.find(c => c.id === clipId);
-        if(item) {
-            item.lengthBars = bars;
-            renderPlaylist();
-        }
-    }, 200);
-}
-
-function stopRecording() {
-    if(!state.isRecording) return;
-
-    state.isRecording = false;
-    document.getElementById('record-btn')?.classList.remove('recording');
-
-    if(state.recordingTimer) {
-        clearInterval(state.recordingTimer);
-        state.recordingTimer = null;
-    }
-
-    try {
-        state.mediaRecorder?.stop();
-    } catch(e) {
-        cleanupRecordingStream();
-    }
-}
-
-function cleanupRecordingStream() {
-    try {
-        state.mediaStream?.getTracks()?.forEach(t => t.stop());
-    } catch(e) {}
-    state.mediaStream = null;
-    state.mediaRecorder = null;
-    state.recordingClipId = null;
-}
-
 // --- CLOCK ---
 Tone.Transport.scheduleRepeat((time) => {
     const step = state.currentStep;
@@ -650,7 +543,7 @@ Tone.Transport.scheduleRepeat((time) => {
         const currentBar = Math.floor(step / 16); // Assuming standard 4/4 grid logic for arrangement for now
         const stepInBar = step % 16;
 
-        state.playlist.forEach(track => {
+        state.playlist.forEach((track, trackIndex) => {
             track.forEach(clip => {
                 if(currentBar >= clip.startBar && currentBar < clip.startBar + clip.lengthBars) {
                     if(clip.type === 'pattern') {
@@ -662,7 +555,7 @@ Tone.Transport.scheduleRepeat((time) => {
                         }
                     } 
                     if(clip.type === 'audio' && currentBar === clip.startBar && stepInBar === 0) {
-                        playAudioClip(clip.id, time);
+                        playAudioClip(clip.id, time, trackIndex);
                     }
                 }
             });
@@ -692,40 +585,26 @@ function playPatternStep(grid, stepIdx, time) {
     }
 }
 
-function playAudioClip(id, time) {
-            const clipData = state.audioClips[id];
-            if (!clipData) return;
+function playAudioClip(clipId, time, trackIndex) {
+    const clipData = state.audioClips[id];
+    if(!clipData || !clipData.buffer) return;
 
-            // Accept either a raw AudioBuffer (clipData.buffer) or Tone.Buffer (clipData.toneBuffer)
-            const rawBuffer = clipData.buffer && (clipData.buffer.getChannelData ? clipData.buffer : null);
-
-            if (!rawBuffer) return;
-
-            try {
-                const ctx = Tone.context.rawContext;
-
-                // Schedule in AudioContext time using Tone's scheduled time
-                const when = (typeof time === "number") ? time : ctx.currentTime;
-
-                const src = ctx.createBufferSource();
-                src.buffer = rawBuffer;
-
-                // Destination: connect directly to raw destination to avoid Tone wrapper issues in iframes/PWA
-                src.connect(ctx.destination);
-
-                src.start(when);
-
-                // Track active sources so Stop works
-                activeSources.push(src);
-
-                src.onended = () => {
-                    const i = activeSources.indexOf(src);
-                    if (i > -1) activeSources.splice(i, 1);
-                };
-            } catch (e) {
-                console.error("Audio playback error:", e);
-            }
-        }
+    try {
+        const source = new Tone.BufferSource({
+            buffer: clipData.buffer
+        }).toDestination();
+        
+        source.start(time);
+        activeSources.push(source);
+        
+        source.onended = () => {
+            const index = activeSources.indexOf(source);
+            if (index > -1) activeSources.splice(index, 1);
+        };
+    } catch (e) {
+        console.error("Audio playback error:", e);
+    }
+}
 
 function clearCurrentPattern() {
     if(state.selectedResType === 'pattern') {
