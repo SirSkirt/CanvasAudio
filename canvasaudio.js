@@ -191,7 +191,14 @@ function generateRuler() {
     const ruler = document.getElementById('ruler');
     ruler.innerHTML = ''; // Clear prev
     for(let i=1; i<=50; i++) {
-        const div = document.createElement('div')function renderPlaylist() {
+        const div = document.createElement('div');
+        div.className = 'ruler-tick';
+        div.innerText = i;
+        ruler.appendChild(div);
+    }
+}
+
+function renderPlaylist() {
     const container = document.getElementById('playlist-tracks');
     container.innerHTML = '';
 
@@ -342,13 +349,6 @@ function openTrackInputMenu(trackIndex, anchorEl){
     setTimeout(() => {
         document.addEventListener('mousedown', _trackInputMenuOutsideHandler, true);
     }, 0);
-}
-lane.appendChild(el);
-        });
-
-        row.appendChild(lane);
-        container.appendChild(row);
-    });
 }
 
 function addClipToTrack(trackIndex, startBar) {
