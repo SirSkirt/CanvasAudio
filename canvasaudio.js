@@ -1,7 +1,14 @@
 // --- APP VERSION ---
 const APP_STAGE = "Alpha";
 const APP_VERSION = "0.3.0";
-const instruments = []
+
+const instruments = [
+  { id: 'kick',  name: 'Kick',  track: 0 },
+  { id: 'snare', name: 'Snare', track: 1 },
+  { id: 'hihat', name: 'Hi-Hat', track: 2 },
+  { id: 'clap',  name: 'Clap',  track: 3 }
+];
+
 let state = {
     isPlaying: false,
     mode: 'PATTERN', // 'PATTERN' | 'SONG'
