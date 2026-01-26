@@ -169,11 +169,13 @@ function renderMixerUI(){
         const mBtn = document.createElement('button');
         mBtn.className = 'strip-btn'+(state.mixer.mutes[i]?' active':'');
         mBtn.textContent='M';
-        mBtn.onclick=()=>{ state.mixer.mutes[i]=!state.mixer.mutes[i]; renderMixerUI(); };
+        mBtn.onclick=()=>{ state.mixer.mutes[i]=!state.mixer.mutes[i];
+            applyMixerToAudio(i); renderMixerUI(); };
         const sBtn = document.createElement('button');
         sBtn.className = 'strip-btn'+(state.mixer.solos[i]?' active':'');
         sBtn.textContent='S';
-        sBtn.onclick=()=>{ state.mixer.solos[i]=!state.mixer.solos[i]; renderMixerUI(); };
+        sBtn.onclick=()=>{ state.mixer.solos[i]=!state.mixer.solos[i];
+            applyMixerToAudio(i); renderMixerUI(); };
         btns.appendChild(mBtn); btns.appendChild(sBtn);
         strip.appendChild(btns);
 
@@ -187,7 +189,8 @@ function renderMixerUI(){
         vol.type='range';
         vol.min='0'; vol.max='1'; vol.step='0.01';
         vol.value=String(state.mixer.volumes[i] ?? 1);
-        vol.oninput=(e)=>{ state.mixer.volumes[i]=parseFloat(e.target.value); };
+        vol.oninput=(e)=>{ state.mixer.volumes[i]=parseFloat(e.target.value);
+            applyMixerToAudio(i); };
         meter.appendChild(vol);
         strip.appendChild(meter);
 
@@ -200,7 +203,8 @@ function renderMixerUI(){
         pan.type='range';
         pan.min='-1'; pan.max='1'; pan.step='0.01';
         pan.value=String(state.mixer.pans[i] ?? 0);
-        pan.oninput=(e)=>{ state.mixer.pans[i]=parseFloat(e.target.value); };
+        pan.oninput=(e)=>{ state.mixer.pans[i]=parseFloat(e.target.value);
+            applyMixerToAudio(i); };
         panRow.appendChild(panLab);
         panRow.appendChild(pan);
         strip.appendChild(panRow);
@@ -507,84 +511,342 @@ function openInputPicker(trackIndex){
 
 let _fxTrackIndex = null;
 function openFxWindow(trackIndex){
-    ensureTrackUiStyles();
-    _fxTrackIndex = trackIndex;
+    // Lazy plugin registry bootstrap (if plugin.js not loaded)
+    if(!window.CA_PLUGINS){
+        window.CA_PLUGINS = [];
+    }
+    if(!window.CA_PLUGINS.find(p=>p && p.id==='autotune')){
+        window.CA_PLUGINS.push({
+            id: 'autotune',
+            name: 'AutoTune (Lite)',
+            create: (ctx)=> {
+                const node = new Tone.PitchShift({ pitch: 0, windowSize: 0.1, delayTime: 0, feedback: 0 });
+                node.wet.value = 1;
+                const params = { key:'C', scale:'Major', retune:0.15, flex:0.0, humanize:0.0 };
+                return { id:'autotune', name:'AutoTune (Lite)', node, params };
+            },
+            createUI: (inst, mount)=>{
+                mount.innerHTML = '';
+                const row = (label, el)=>{
+                    const r=document.createElement('div');
+                    r.style.display='flex'; r.style.alignItems='center'; r.style.gap='8px'; r.style.margin='6px 0';
+                    const l=document.createElement('div');
+                    l.textContent=label; l.style.width='120px'; l.style.color='#ddd'; l.style.fontSize='12px';
+                    r.appendChild(l); r.appendChild(el);
+                    mount.appendChild(r);
+                };
+                const keySel=document.createElement('select');
+                ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'].forEach(k=>{
+                    const o=document.createElement('option'); o.value=k; o.textContent=k; keySel.appendChild(o);
+                });
+                keySel.value=inst.params.key;
+                keySel.onchange=()=>{ inst.params.key=keySel.value; };
+                row('Key', keySel);
 
-    // ensure slots arrays
-    if(!state.trackFxSlots) state.trackFxSlots = Array.from({length: 8}, () => Array(10).fill(null));
-    if(!state.trackFxSlotEnabled) state.trackFxSlotEnabled = Array.from({length: 8}, () => Array(10).fill(true));
+                const scaleSel=document.createElement('select');
+                ['Major','Minor'].forEach(s=>{
+                    const o=document.createElement('option'); o.value=s; o.textContent=s; scaleSel.appendChild(o);
+                });
+                scaleSel.value=inst.params.scale;
+                scaleSel.onchange=()=>{ inst.params.scale=scaleSel.value; };
+                row('Scale', scaleSel);
 
-    const overlay = document.getElementById('fxOverlay');
-    const title = document.getElementById('fxTitle');
-    const body  = document.getElementById('fxBody');
-    title.textContent = `Track FX — Track ${trackIndex+1}`;
-    body.innerHTML = '';
+                const mkSlider=(min,max,step,val,on)=>{
+                    const wrap=document.createElement('div'); wrap.style.flex='1';
+                    const s=document.createElement('input'); s.type='range'; s.min=String(min); s.max=String(max); s.step=String(step); s.value=String(val); s.style.width='100%';
+                    const v=document.createElement('div'); v.style.color='#bbb'; v.style.fontSize='11px'; v.style.textAlign='right'; v.textContent=String(val);
+                    s.oninput=()=>{ v.textContent=s.value; on(parseFloat(s.value)); };
+                    wrap.appendChild(s); wrap.appendChild(v);
+                    return wrap;
+                };
 
-    const pluginList = (window.CA_PLUGINS || []).slice();
-    const options = ['(empty)'].concat(pluginList.map(p=>p.name));
+                row('Retune Speed', mkSlider(0.01, 0.5, 0.01, inst.params.retune, (x)=>{ inst.params.retune=x; }));
+                row('Flex Tune', mkSlider(0, 1, 0.01, inst.params.flex, (x)=>{ inst.params.flex=x; }));
+                row('Humanize', mkSlider(0, 1, 0.01, inst.params.humanize, (x)=>{ inst.params.humanize=x; }));
 
-    for(let i=0;i<10;i++){
-        const row = document.createElement('div');
-        row.className = 'fxSlot';
-
-        const label = document.createElement('div');
-        label.className = 'fxSlotLabel';
-        label.textContent = `Slot ${i+1}`;
-
-        const sel = document.createElement('select');
-        sel.className = 'fxSlotSelect';
-        options.forEach((name, idx)=>{
-            const opt = document.createElement('option');
-            opt.value = String(idx-1); // -1 = empty
-            opt.textContent = name;
-            sel.appendChild(opt);
-        });
-
-        const curId = state.trackFxSlots[trackIndex][i];
-        if(curId){
-            const pIdx = pluginList.findIndex(p=>p.id === curId);
-            sel.value = String(pIdx);
-        }else{
-            sel.value = "-1";
-        }
-
-        sel.onchange = ()=>{
-            const v = parseInt(sel.value,10);
-            if(v < 0){
-                state.trackFxSlots[trackIndex][i] = null;
-            }else{
-                state.trackFxSlots[trackIndex][i] = pluginList[v]?.id || null;
+                const note=document.createElement('div');
+                note.style.color='#888'; note.style.fontSize='11px'; note.style.marginTop='8px';
+                note.textContent='Note: This is a lightweight placeholder using PitchShift (not full pitch-correction).';
+                mount.appendChild(note);
             }
-        };
-
-        const tog = document.createElement('button');
-        tog.className = 'fxSlotToggle' + (state.trackFxSlotEnabled[trackIndex][i] ? '' : ' off');
-        tog.textContent = state.trackFxSlotEnabled[trackIndex][i] ? '●' : '○';
-        tog.onclick = ()=>{
-            state.trackFxSlotEnabled[trackIndex][i] = !state.trackFxSlotEnabled[trackIndex][i];
-            tog.className = 'fxSlotToggle' + (state.trackFxSlotEnabled[trackIndex][i] ? '' : ' off');
-            tog.textContent = state.trackFxSlotEnabled[trackIndex][i] ? '●' : '○';
-        };
-
-        row.appendChild(label);
-        row.appendChild(sel);
-        row.appendChild(tog);
-        body.appendChild(row);
+        });
     }
 
-    const note = document.createElement('div');
-    note.className = 'fxSmall';
-    note.textContent = 'FX slots are UI-only for now; audio routing will be wired to these slots in the next step.';
-    body.appendChild(note);
+    const overlay = document.getElementById('fxOverlay');
+    const win = document.getElementById('fxWindow');
+    const title = document.getElementById('fxWinTitle');
+    const body = document.getElementById('fxWinBody');
 
-    overlay.style.display = 'flex';
+    if(!overlay || !win || !title || !body){
+        console.warn('FX window elements missing in DOM');
+        return;
+    }
+
+    overlay.style.display = 'block';
+    win.style.display = 'block';
+    title.textContent = 'FX (Track ' + (trackIndex+1) + ')';
+
+    state.trackPlugins = state.trackPlugins || Array(8).fill(0).map(()=>Array(10).fill(null));
+    const slots = state.trackPlugins[trackIndex];
+
+    body.innerHTML = '';
+
+    const header = document.createElement('div');
+    header.style.display='flex';
+    header.style.justifyContent='space-between';
+    header.style.alignItems='center';
+    header.style.marginBottom='8px';
+
+    const left = document.createElement('div');
+    left.style.color='#ccc';
+    left.style.fontSize='12px';
+    left.textContent='Slots (click to select)';
+    header.appendChild(left);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent='Close';
+    closeBtn.className='btn';
+    closeBtn.onclick=()=>closeFxWindow();
+    header.appendChild(closeBtn);
+
+    body.appendChild(header);
+
+    const slotList = document.createElement('div');
+    slotList.className = 'fx-slot-list';
+    body.appendChild(slotList);
+
+    const editor = document.createElement('div');
+    editor.style.marginTop='10px';
+    editor.style.paddingTop='10px';
+    editor.style.borderTop='1px solid rgba(255,255,255,0.08)';
+    body.appendChild(editor);
+
+    let selectedSlot = 0;
+
+    const renderEditor = ()=>{
+        editor.innerHTML='';
+        const inst = slots[selectedSlot];
+
+        const row = document.createElement('div');
+        row.style.display='flex';
+        row.style.alignItems='center';
+        row.style.gap='8px';
+        row.style.flexWrap='wrap';
+
+        const sel = document.createElement('select');
+        sel.className='fx-plugin-select';
+        const emptyOpt=document.createElement('option');
+        emptyOpt.value=''; emptyOpt.textContent='(empty)';
+        sel.appendChild(emptyOpt);
+        (window.CA_PLUGINS||[]).forEach(p=>{
+            const o=document.createElement('option');
+            o.value=p.id; o.textContent=p.name;
+            sel.appendChild(o);
+        });
+        sel.value = inst?.id || '';
+        row.appendChild(sel);
+
+        const setBtn=document.createElement('button');
+        setBtn.className='btn';
+        setBtn.textContent='Set';
+        setBtn.onclick=()=>{
+            const pid = sel.value;
+            if(!pid){
+                removePluginFromTrackSlot(trackIndex, selectedSlot);
+                render();
+                return;
+            }
+            setPluginToTrackSlot(trackIndex, selectedSlot, pid);
+            render();
+        };
+        row.appendChild(setBtn);
+
+        const editBtn=document.createElement('button');
+        editBtn.className='btn';
+        editBtn.textContent='Edit';
+        editBtn.disabled = !inst;
+        editBtn.onclick=()=>{ openPluginEditor(trackIndex, selectedSlot); };
+        row.appendChild(editBtn);
+
+        const clearBtn=document.createElement('button');
+        clearBtn.className='btn';
+        clearBtn.textContent='Clear';
+        clearBtn.disabled = !inst;
+        clearBtn.onclick=()=>{ removePluginFromTrackSlot(trackIndex, selectedSlot); render(); };
+        row.appendChild(clearBtn);
+
+        editor.appendChild(row);
+
+        const help=document.createElement('div');
+        help.style.color='#888'; help.style.fontSize='11px'; help.style.marginTop='6px';
+        help.textContent='Set loads a plugin into the selected slot. Edit opens the plugin UI.';
+        editor.appendChild(help);
+    };
+
+    const render = ()=>{
+        slotList.innerHTML='';
+        for(let i=0;i<10;i++){
+            const slot = document.createElement('div');
+            slot.className='fx-slot' + (i===selectedSlot?' selected':'');
+            slot.onclick=()=>{ selectedSlot=i; render(); };
+
+            const label = document.createElement('div');
+            label.className='fx-slot-label';
+            label.textContent = 'Slot ' + (i+1);
+            slot.appendChild(label);
+
+            const name = document.createElement('div');
+            name.className='fx-slot-name';
+            name.textContent = slots[i]?.name || '(empty)';
+            slot.appendChild(name);
+
+            slotList.appendChild(slot);
+        }
+        renderEditor();
+    };
+
+    render();
 }
+
 
 function closeFxWindow(){
     const overlay = document.getElementById('fxOverlay');
     if(overlay) overlay.style.display = 'none';
     _fxTrackIndex = null;
 }
+
+function ensureTrackAudio(trackIndex){
+    state._audioTracks = state._audioTracks || Array(8).fill(null);
+    if(state._audioTracks[trackIndex]) return state._audioTracks[trackIndex];
+
+    const dest = Tone.getDestination ? Tone.getDestination() : Tone.Destination;
+
+    const input = new Tone.Gain(1);
+    const pan = new Tone.Panner(0);
+    const vol = new Tone.Gain(1);
+
+    input.connect(pan);
+    pan.connect(vol);
+    vol.connect(dest);
+
+    const track = { input, pan, vol, plugins: Array(10).fill(null) };
+    state._audioTracks[trackIndex] = track;
+
+    applyMixerToAudio(trackIndex);
+    rebuildTrackFxChain(trackIndex);
+
+    return track;
+}
+
+function applyMixerToAudio(trackIndex){
+    if(!state || !state.mixer) return;
+    const t = (state._audioTracks && state._audioTracks[trackIndex]) ? state._audioTracks[trackIndex] : null;
+    if(!t) return;
+
+    const v = state.mixer.volumes?.[trackIndex];
+    const p = state.mixer.pans?.[trackIndex];
+    const m = state.mixer.mutes?.[trackIndex];
+
+    try{ t.vol.gain.value = (m ? 0 : (typeof v==='number' ? v : 1)); }catch(e){}
+    try{ t.pan.pan.value = (typeof p==='number' ? p : 0); }catch(e){}
+}
+
+function rebuildTrackFxChain(trackIndex){
+    const t = ensureTrackAudio(trackIndex);
+
+    try{ t.input.disconnect(); }catch(e){}
+    let cursor = t.input;
+
+    const slots = (state.trackPlugins && state.trackPlugins[trackIndex]) ? state.trackPlugins[trackIndex] : [];
+
+    for(let i=0;i<10;i++){
+        const inst = slots[i];
+        if(inst && inst.node){
+            try{ cursor.connect(inst.node); }catch(e){}
+            cursor = inst.node;
+        }
+    }
+    try{ cursor.connect(t.pan); }catch(e){}
+}
+
+function setPluginToTrackSlot(trackIndex, slotIndex, pluginId){
+    state.trackPlugins = state.trackPlugins || Array(8).fill(0).map(()=>Array(10).fill(null));
+    const def = (window.CA_PLUGINS||[]).find(p=>p.id===pluginId);
+    if(!def) return null;
+
+    removePluginFromTrackSlot(trackIndex, slotIndex);
+
+    const inst = def.create({ trackIndex, slotIndex });
+    state.trackPlugins[trackIndex][slotIndex] = inst;
+
+    rebuildTrackFxChain(trackIndex);
+    return inst;
+}
+
+function removePluginFromTrackSlot(trackIndex, slotIndex){
+    if(!state.trackPlugins || !state.trackPlugins[trackIndex]) return;
+    const inst = state.trackPlugins[trackIndex][slotIndex];
+    if(inst && inst.node){
+        try{ if(inst.node.dispose) inst.node.dispose(); }catch(e){}
+    }
+    state.trackPlugins[trackIndex][slotIndex] = null;
+    rebuildTrackFxChain(trackIndex);
+}
+
+function openPluginEditor(trackIndex, slotIndex){
+    const inst = state.trackPlugins?.[trackIndex]?.[slotIndex];
+    if(!inst) return;
+    const def = (window.CA_PLUGINS||[]).find(p=>p.id===inst.id);
+    if(!def || !def.createUI) return;
+
+    const overlay = document.getElementById('fxOverlay');
+    if(!overlay) return;
+
+    const modal = document.createElement('div');
+    modal.style.position='fixed';
+    modal.style.left='50%';
+    modal.style.top='50%';
+    modal.style.transform='translate(-50%,-50%)';
+    modal.style.width='520px';
+    modal.style.maxWidth='92vw';
+    modal.style.maxHeight='80vh';
+    modal.style.overflow='auto';
+    modal.style.background='#1a1a1a';
+    modal.style.border='1px solid rgba(255,255,255,0.12)';
+    modal.style.borderRadius='10px';
+    modal.style.boxShadow='0 12px 40px rgba(0,0,0,0.6)';
+    modal.style.padding='12px';
+    modal.style.zIndex='100000';
+
+    const head=document.createElement('div');
+    head.style.display='flex';
+    head.style.justifyContent='space-between';
+    head.style.alignItems='center';
+    head.style.marginBottom='10px';
+
+    const h=document.createElement('div');
+    h.textContent = (inst.name||'Plugin') + ' — Track ' + (trackIndex+1) + ' Slot ' + (slotIndex+1);
+    h.style.color='#eee';
+    h.style.fontSize='14px';
+    head.appendChild(h);
+
+    const x=document.createElement('button');
+    x.textContent='✕';
+    x.className='btn';
+    x.onclick=()=>{ modal.remove(); };
+    head.appendChild(x);
+
+    modal.appendChild(head);
+
+    const mount=document.createElement('div');
+    modal.appendChild(mount);
+
+    def.createUI(inst, mount);
+
+    overlay.appendChild(modal);
+}
+
+
 
 function renderResources() {
     const patList = document.getElementById('pattern-list');
@@ -1103,7 +1365,9 @@ function playAudioClip(id, time) {
                 src.buffer = rawBuffer;
 
                 // Destination: connect directly to raw destination to avoid Tone wrapper issues in iframes/PWA
-                src.connect(ctx.destination);
+                const t = ensureTrackAudio(clip.track ?? 0);
+            const inNode = (t.input && t.input.input) ? t.input.input : (t.input ? t.input : null);
+            if(inNode){ src.connect(inNode); } else { src.connect(ctx.destination); }
 
                 src.start(when);
 
