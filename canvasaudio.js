@@ -1,7 +1,7 @@
 
 // --- APP VERSION ---
 const APP_STAGE = "Alpha";
-const APP_VERSION = "0.2.4";
+const APP_VERSION = "0.2.5";
 
 // --- CONSTANTS ---
 const instruments = [
@@ -487,24 +487,35 @@ function playPatternStep(grid, stepIdx, time) {
 
 function playAudioClip(id, time) {
     const clipData = state.audioClips[id];
-    if(!clipData || !clipData.buffer) return;
+
+    // Must be raw AudioBuffer (decoded via native decodeAudioData)
+    if (!clipData || !clipData.buffer) return;
 
     try {
-        const source = new Tone.BufferSource({
-            buffer: clipData.buffer
-        }).toDestination();
-        
+        const ctx = Tone.context.rawContext;
+
+        // Native WebAudio source (avoids ToneBufferSource 'not loaded' issues with raw AudioBuffer)
+        const source = ctx.createBufferSource();
+        source.buffer = clipData.buffer;
+
+        // Route through Tone's destination if available, else raw destination
+        const dest = (Tone.Destination && Tone.Destination.input) ? Tone.Destination.input : ctx.destination;
+        source.connect(dest);
+
+        // Schedule at Tone's AudioContext time
         source.start(time);
+
         activeSources.push(source);
-        
+
         source.onended = () => {
-            const index = activeSources.indexOf(source);
-            if (index > -1) activeSources.splice(index, 1);
+            const idx = activeSources.indexOf(source);
+            if (idx > -1) activeSources.splice(idx, 1);
         };
     } catch (e) {
         console.error("Audio playback error:", e);
     }
 }
+
 
 function clearCurrentPattern() {
     if(state.selectedResType === 'pattern') {
