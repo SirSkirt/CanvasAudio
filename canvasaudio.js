@@ -77,6 +77,7 @@ function init() {
     renderChannelRack();
     selectResource('pattern', 'pat1');
     initMixerUI();
+    startMixerMeterLoop();
     Tone.Transport.bpm.value = 128;
 }
 
@@ -653,6 +654,47 @@ function applyMixerStateToNodes(){
     }
 }
 
+
+function _meterValueToDb(v){
+    // Tone.Meter getValue() typically returns decibels (number) or array of numbers
+    if(Array.isArray(v)) v = Math.max(...v.map(x => (typeof x==='number'?x:-Infinity)));
+    if(typeof v !== 'number' || !isFinite(v)) return -Infinity;
+    return v;
+}
+function _dbToNorm(db){
+    // map -60dB..0dB to 0..1
+    if(!isFinite(db)) return 0;
+    const clamped = Math.max(-60, Math.min(0, db));
+    return (clamped + 60) / 60;
+}
+function updateMixerMeters(){
+    const nodes = state._mixerNodes;
+    const ui = state._mixerUi;
+    if(!nodes || !nodes.tracks || !ui || !ui.meterFills) return;
+    const n = Math.min(nodes.tracks.length, ui.meterFills.length);
+    for(let i=0;i<n;i++){
+        const t = nodes.tracks[i];
+        const fill = ui.meterFills[i];
+        const dbEl = ui.meterDbs && ui.meterDbs[i];
+        if(!t || !t.meter || !fill) continue;
+        const db = _meterValueToDb(t.meter.getValue());
+        const norm = _dbToNorm(db);
+        fill.style.height = (norm*100).toFixed(1) + '%';
+        if(dbEl){
+            dbEl.textContent = isFinite(db) ? (db.toFixed(1) + ' dB') : '-∞';
+        }
+    }
+}
+function startMixerMeterLoop(){
+    if(startMixerMeterLoop._started) return;
+    startMixerMeterLoop._started = true;
+    const step = () => {
+        try{ updateMixerMeters(); }catch(e){}
+        requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+}
+
 function initMixerUI(){
     // Avoid crash if HTML not present (e.g., older embeds)
     if(!document.getElementById('mixerOverlay')) return;
@@ -741,6 +783,22 @@ function renderMixerChannels(){
         const sliderWrap = document.createElement('div');
         sliderWrap.className = 'mixerSliderWrap';
 
+        // Level meter (behind fader)
+        const meter = document.createElement('div');
+        meter.className = 'mixerMeter';
+        const meterFill = document.createElement('div');
+        meterFill.className = 'mixerMeterFill';
+        meter.appendChild(meterFill);
+
+        const meterDb = document.createElement('div');
+        meterDb.className = 'mixerMeterDb';
+        meterDb.textContent = '-∞';
+
+        // stash refs for animation updates
+        state._mixerUi = state._mixerUi || { meterFills: [], meterDbs: [] };
+        state._mixerUi.meterFills[i] = meterFill;
+        state._mixerUi.meterDbs[i] = meterDb;
+
         const fader = document.createElement('input');
         fader.type = 'range';
         fader.min = '0';
@@ -753,7 +811,9 @@ function renderMixerChannels(){
             applyMixerStateToNodes();
         };
 
+        sliderWrap.appendChild(meter);
         sliderWrap.appendChild(fader);
+        sliderWrap.appendChild(meterDb);
 
         const panLabel = document.createElement('div');
         panLabel.className = 'mixerLabelSmall';

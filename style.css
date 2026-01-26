@@ -427,17 +427,56 @@ button#stop-btn:hover { background: #d32f2f; }
 .mixerBtnSmall.active{ background:#2d5f2f; border-color:#3a7a3f; }
 
 .mixerSliderWrap{
+  position: relative;
+  width: 60px;
+  height: 210px;
   display:flex;
   justify-content:center;
   align-items:center;
-  height: 210px;
 }
 
+
+/* Mixer level meter (behind fader) */
+.mixerMeter{
+  position:absolute;
+  left:50%;
+  transform:translateX(-50%);
+  bottom: 22px;
+  width: 18px;
+  height: 170px;
+  background:#0f1013;
+  border:1px solid #2a2b2f;
+  border-radius:6px;
+  overflow:hidden;
+}
+.mixerMeterFill{
+  position:absolute;
+  left:0;
+  bottom:0;
+  width:100%;
+  height:0%;
+  background:#6aa84f;
+}
+.mixerMeterDb{
+  position:absolute;
+  left:50%;
+  transform:translateX(-50%);
+  bottom:0;
+  font-size:11px;
+  color:#b8b8b8;
+  pointer-events:none;
+}
+
+
 .mixerFader{
+  position:absolute;
+  left:50%;
+  transform:translateX(-50%);
+  bottom: 22px;
   writing-mode: bt-lr;
   -webkit-appearance: slider-vertical;
-  width: 28px;
-  height: 200px;
+  width: 44px;
+  height: 170px;
 }
 
 .mixerKnob{
@@ -449,3 +488,9 @@ button#stop-btn:hover { background: #d32f2f; }
   color: #9fa2aa;
   text-align: center;
 }
+
+
+/* Make the fader track transparent so the meter shows through */
+.mixerFader::-webkit-slider-runnable-track{ background: transparent; border: none; }
+.mixerFader::-moz-range-track{ background: transparent; border: none; }
+.mixerFader::-ms-track{ background: transparent; border: none; color: transparent; }
