@@ -536,6 +536,7 @@ function openFxWindow(trackIndex){
     title.textContent = 'FX (Track ' + (trackIndex+1) + ')';
 
     state.trackPlugins = state.trackPlugins || Array(8).fill(0).map(()=>Array(10).fill(null));
+    state.trackPluginStates = state.trackPluginStates || Array(8).fill(0).map(()=>Array(10).fill(null));
     const slots = state.trackPlugins[trackIndex];
 
 
@@ -766,6 +767,7 @@ function rebuildTrackFxChain(trackIndex){
 
 function setPluginToTrackSlot(trackIndex, slotIndex, pluginId){
     state.trackPlugins = state.trackPlugins || Array(8).fill(0).map(()=>Array(10).fill(null));
+    state.trackPluginStates = state.trackPluginStates || Array(8).fill(0).map(()=>Array(10).fill(null));
     const def = (window.CA_PLUGINS||[]).find(p=>p.id===pluginId);
     if(!def) return null;
 
@@ -774,11 +776,23 @@ function setPluginToTrackSlot(trackIndex, slotIndex, pluginId){
     const inst = def.create({ trackIndex, slotIndex });
     state.trackPlugins[trackIndex][slotIndex] = inst;
 
+    // Restore saved plugin state (if any)
+    const saved = state.trackPluginStates?.[trackIndex]?.[slotIndex];
+    if(saved && inst && typeof inst.setState === 'function'){
+        try{ inst.setState(saved); }catch(e){}
+    }
+
     rebuildTrackFxChain(trackIndex);
     return inst;
 }
 
 function removePluginFromTrackSlot(trackIndex, slotIndex){
+
+    // Persist plugin state before removing (if supported)
+    state.trackPluginStates = state.trackPluginStates || Array(8).fill(0).map(()=>Array(10).fill(null));
+    if(inst && typeof inst.getState === 'function'){
+        try{ state.trackPluginStates[trackIndex][slotIndex] = inst.getState(); }catch(e){}
+    }
     if(!state.trackPlugins || !state.trackPlugins[trackIndex]) return;
     const inst = state.trackPlugins[trackIndex][slotIndex];
     if(inst && inst.node){
@@ -836,7 +850,7 @@ function openPluginEditor(trackIndex, slotIndex){
     const x=document.createElement('button');
     x.textContent='✕';
     x.className='btn';
-    x.onclick=()=>{ modal.remove(); };
+    x.onclick=()=>{ try{ state.trackPluginStates = state.trackPluginStates || Array(8).fill(0).map(()=>Array(10).fill(null)); if(inst && typeof inst.getState==='function'){ state.trackPluginStates[trackIndex][slotIndex] = inst.getState(); } }catch(e){} modal.remove(); };
     head.appendChild(x);
 
     modal.appendChild(head);

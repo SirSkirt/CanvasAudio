@@ -32,7 +32,19 @@
       }
     }
 
-    function mountUI(container){
+    
+    function setState(next){
+      if(!next) return;
+      if(typeof next.key === "string") state.key = next.key;
+      if(typeof next.scale === "string") state.scale = next.scale;
+      if(typeof next.retune === "number") state.retune = clamp(next.retune, 0.01, 2.0);
+      if(typeof next.flex === "number") state.flex = clamp(next.flex, 0.0, 1.0);
+      if(typeof next.humanize === "number") state.humanize = clamp(next.humanize, 0.0, 1.0);
+      if(typeof next.semitones === "number") state.semitones = Math.round(clamp(next.semitones, -12, 12));
+      setSemitones(state.semitones);
+    }
+
+function mountUI(container){
       container.innerHTML = "";
 
       const title = document.createElement("div");
@@ -87,6 +99,10 @@
 
       keyEl.value = state.key;
       scaleEl.value = state.scale;
+      semiEl.value = String(state.semitones);
+      semiVal.textContent = String(state.semitones);
+      retEl.value = String(state.retune);
+      retVal.textContent = state.retune.toFixed(2) + "s";
 
       keyEl.addEventListener("change", ()=>{ state.key = keyEl.value; });
       scaleEl.addEventListener("change", ()=>{ state.scale = scaleEl.value; });
@@ -113,6 +129,7 @@
       node,
       mountUI,
       getState: ()=>({ ...state }),
+      setState: (s)=>{ setState(s); },
       setEnabled: (on)=>{ node.wet.value = on ? 1.0 : 0.0; }
     };
   }
