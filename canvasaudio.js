@@ -518,66 +518,8 @@ function openInputPicker(trackIndex){
 
 let _fxTrackIndex = null;
 function openFxWindow(trackIndex){
-    // Lazy plugin registry bootstrap (if plugin.js not loaded)
-    if(!window.CA_PLUGINS){
-        window.CA_PLUGINS = [];
-    }
-    if(!window.CA_PLUGINS.find(p=>p && p.id==='autotune')){
-        window.CA_PLUGINS.push({
-            id: 'autotune',
-            name: 'AutoTune (Lite)',
-            create: (ctx)=> {
-                const node = new Tone.PitchShift({ pitch: 0, windowSize: 0.1, delayTime: 0, feedback: 0 });
-                node.wet.value = 1;
-                const params = { key:'C', scale:'Major', retune:0.15, flex:0.0, humanize:0.0 };
-                return { id:'autotune', name:'AutoTune (Lite)', node, params };
-            },
-            createUI: (inst, mount)=>{
-                mount.innerHTML = '';
-                const row = (label, el)=>{
-                    const r=document.createElement('div');
-                    r.style.display='flex'; r.style.alignItems='center'; r.style.gap='8px'; r.style.margin='6px 0';
-                    const l=document.createElement('div');
-                    l.textContent=label; l.style.width='120px'; l.style.color='#ddd'; l.style.fontSize='12px';
-                    r.appendChild(l); r.appendChild(el);
-                    mount.appendChild(r);
-                };
-                const keySel=document.createElement('select');
-                ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'].forEach(k=>{
-                    const o=document.createElement('option'); o.value=k; o.textContent=k; keySel.appendChild(o);
-                });
-                keySel.value=inst.params.key;
-                keySel.onchange=()=>{ inst.params.key=keySel.value; };
-                row('Key', keySel);
-
-                const scaleSel=document.createElement('select');
-                ['Major','Minor'].forEach(s=>{
-                    const o=document.createElement('option'); o.value=s; o.textContent=s; scaleSel.appendChild(o);
-                });
-                scaleSel.value=inst.params.scale;
-                scaleSel.onchange=()=>{ inst.params.scale=scaleSel.value; };
-                row('Scale', scaleSel);
-
-                const mkSlider=(min,max,step,val,on)=>{
-                    const wrap=document.createElement('div'); wrap.style.flex='1';
-                    const s=document.createElement('input'); s.type='range'; s.min=String(min); s.max=String(max); s.step=String(step); s.value=String(val); s.style.width='100%';
-                    const v=document.createElement('div'); v.style.color='#bbb'; v.style.fontSize='11px'; v.style.textAlign='right'; v.textContent=String(val);
-                    s.oninput=()=>{ v.textContent=s.value; on(parseFloat(s.value)); };
-                    wrap.appendChild(s); wrap.appendChild(v);
-                    return wrap;
-                };
-
-                row('Retune Speed', mkSlider(0.01, 0.5, 0.01, inst.params.retune, (x)=>{ inst.params.retune=x; }));
-                row('Flex Tune', mkSlider(0, 1, 0.01, inst.params.flex, (x)=>{ inst.params.flex=x; }));
-                row('Humanize', mkSlider(0, 1, 0.01, inst.params.humanize, (x)=>{ inst.params.humanize=x; }));
-
-                const note=document.createElement('div');
-                note.style.color='#888'; note.style.fontSize='11px'; note.style.marginTop='8px';
-                note.textContent='Note: This is a lightweight placeholder using PitchShift (not full pitch-correction).';
-                mount.appendChild(note);
-            }
-        });
-    }
+    // Plugin registry comes from plugin.js (window.CA_PLUGINS)
+    if(!window.CA_PLUGINS){ window.CA_PLUGINS = []; }
 
     const overlay = document.getElementById('fxOverlay');
     const win = document.getElementById('fxWindow');
@@ -849,8 +791,16 @@ function removePluginFromTrackSlot(trackIndex, slotIndex){
 function openPluginEditor(trackIndex, slotIndex){
     const inst = state.trackPlugins?.[trackIndex]?.[slotIndex];
     if(!inst) return;
-    const def = (window.CA_PLUGINS||[]).find(p=>p.id===inst.id);
-    if(!def || !def.createUI) return;
+    const def = (window.CA_PLUGINS||[]).find(p=>p.id===inst.id) || null;
+
+    // Support both plugin.js style (instance.mountUI) and legacy style (def.createUI / def.mountUI)
+    const mountFn =
+        (inst && typeof inst.mountUI === 'function') ? ((mount)=>inst.mountUI(mount)) :
+        (def && typeof def.mountUI === 'function') ? ((mount)=>def.mountUI(inst, mount)) :
+        (def && typeof def.createUI === 'function') ? ((mount)=>def.createUI(inst, mount)) :
+        null;
+
+    if(!mountFn) return;
 
     const overlay = document.getElementById('fxOverlay');
     if(!overlay) return;
@@ -894,7 +844,7 @@ function openPluginEditor(trackIndex, slotIndex){
     const mount=document.createElement('div');
     modal.appendChild(mount);
 
-    def.createUI(inst, mount);
+    mountFn(mount);
 
     overlay.appendChild(modal);
 }
