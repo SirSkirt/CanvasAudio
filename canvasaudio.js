@@ -788,13 +788,14 @@ function setPluginToTrackSlot(trackIndex, slotIndex, pluginId){
 
 function removePluginFromTrackSlot(trackIndex, slotIndex){
 
+    if(!state.trackPlugins || !state.trackPlugins[trackIndex]) return;
+    const inst = state.trackPlugins[trackIndex][slotIndex];
+
     // Persist plugin state before removing (if supported)
     state.trackPluginStates = state.trackPluginStates || Array(8).fill(0).map(()=>Array(10).fill(null));
     if(inst && typeof inst.getState === 'function'){
         try{ state.trackPluginStates[trackIndex][slotIndex] = inst.getState(); }catch(e){}
     }
-    if(!state.trackPlugins || !state.trackPlugins[trackIndex]) return;
-    const inst = state.trackPlugins[trackIndex][slotIndex];
     if(inst && inst.node){
         try{ if(inst.node.dispose) inst.node.dispose(); }catch(e){}
     }
