@@ -3,7 +3,6 @@
 const APP_STAGE = "Alpha";
 const APP_VERSION = "0.3.1";
 window.CA_VERSION = APP_VERSION;
-const clip = null;
 const APP_BUILD = "1";
 // --- CONSTANTS ---
 const instruments = [
