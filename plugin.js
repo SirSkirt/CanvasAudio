@@ -120,11 +120,7 @@
   PLUGINS.push({
     id: "autotune",
     name: "AutoTune (Lite)",
-    create: createAutoTuneLite,
-    // Back-compat with canvasaudio.js which expects createUI(inst, mount)
-    createUI: (inst, mount) => {
-      if (inst && typeof inst.mountUI === "function") inst.mountUI(mount);
-    }
+    create: createAutoTuneLite
   });
 
   window.CA_PLUGINS = PLUGINS;
