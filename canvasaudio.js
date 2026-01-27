@@ -461,14 +461,6 @@ function ensureTrackUiStyles(){
         .fxSlotToggle{ width:22px; height:22px; border-radius:6px; border:1px solid rgba(255,255,255,0.18); background:rgba(0,0,0,0.35); color:#ddd; cursor:pointer; display:flex; align-items:center; justify-content:center; }
         .fxSlotToggle.off{ opacity:0.35; }
         .fxSmall{ font-size:12px; opacity:0.75; margin-top:10px; }
-
-        /* FX window inner layout (0.3.0 placeholder DOM) */
-        .fxwin-header{ display:flex; justify-content:space-between; align-items:center; padding:12px 14px; border-bottom:1px solid rgba(255,255,255,0.10); }
-        .fxwin-titlebar{ font-weight:700; color:#e6e6e6; }
-        .fxwin-body{ padding:12px 14px 16px; }
-        #fxPluginSelect{ background:rgba(0,0,0,0.35); color:#ddd; border:1px solid rgba(255,255,255,0.18); border-radius:6px; height:26px; padding:0 8px; }
-        #fxAddPluginBtn, #fxCloseBtn{ width:auto; height:26px; border-radius:6px; border:1px solid rgba(255,255,255,0.18); background:rgba(0,0,0,0.35); color:#ddd; padding:0 10px; cursor:pointer; }
-        #fxAddPluginBtn:hover, #fxCloseBtn:hover{ background:rgba(255,255,255,0.08); }
     `;
     document.head.appendChild(style);
 
@@ -589,29 +581,12 @@ function openFxWindow(trackIndex){
         return;
     }
 
-    overlay.style.display = 'flex';
+    overlay.style.display = 'block';
     win.style.display = 'block';
     title.textContent = 'FX (Track ' + (trackIndex+1) + ')';
 
     state.trackPlugins = state.trackPlugins || Array(8).fill(0).map(()=>Array(10).fill(null));
     const slots = state.trackPlugins[trackIndex];
-
-
-    // Wire placeholder header controls (0.3.0 FX DOM)
-    const pluginSelectTop = document.getElementById('fxPluginSelect');
-    const addBtnTop = document.getElementById('fxAddPluginBtn');
-    const closeBtnTop = document.getElementById('fxCloseBtn');
-
-
-    if(pluginSelectTop){
-        pluginSelectTop.onchange = ()=> {
-            const editorSel = body.querySelector('select.fx-plugin-select');
-            if(editorSel) editorSel.value = pluginSelectTop.value;
-        };
-    }
-    if(closeBtnTop) closeBtnTop.onclick = ()=>closeFxWindow();
-    // click outside to close
-    overlay.onmousedown = (e)=>{ if(e.target === overlay) closeFxWindow(); };
 
     body.innerHTML = '';
 
@@ -647,33 +622,6 @@ function openFxWindow(trackIndex){
 
     let selectedSlot = 0;
 
-
-    const syncTopSelect = ()=>{
-        if(!pluginSelectTop) return;
-        pluginSelectTop.innerHTML = '';
-        const emptyOpt=document.createElement('option');
-        emptyOpt.value=''; emptyOpt.textContent='(empty)';
-        pluginSelectTop.appendChild(emptyOpt);
-        (window.CA_PLUGINS||[]).forEach(p=>{
-            const o=document.createElement('option');
-            o.value=p.id; o.textContent=p.name;
-            pluginSelectTop.appendChild(o);
-        });
-        pluginSelectTop.value = slots[selectedSlot]?.id || '';
-    };
-
-    if(addBtnTop){
-        addBtnTop.onclick = ()=>{
-            const pid = pluginSelectTop ? pluginSelectTop.value : '';
-            if(!pid){
-                removePluginFromTrackSlot(trackIndex, selectedSlot);
-                render();
-                return;
-            }
-            setPluginToTrackSlot(trackIndex, selectedSlot, pid);
-            render();
-        };
-    }
     const renderEditor = ()=>{
         editor.innerHTML='';
         const inst = slots[selectedSlot];
@@ -695,7 +643,6 @@ function openFxWindow(trackIndex){
             sel.appendChild(o);
         });
         sel.value = inst?.id || '';
-        sel.onchange = ()=>{ if(pluginSelectTop) pluginSelectTop.value = sel.value; };
         row.appendChild(sel);
 
         const setBtn=document.createElement('button');
@@ -755,7 +702,6 @@ function openFxWindow(trackIndex){
             slotList.appendChild(slot);
         }
         renderEditor();
-        syncTopSelect();
     };
 
     render();
@@ -850,7 +796,8 @@ function openPluginEditor(trackIndex, slotIndex){
     const inst = state.trackPlugins?.[trackIndex]?.[slotIndex];
     if(!inst) return;
     const def = (window.CA_PLUGINS||[]).find(p=>p.id===inst.id);
-    if(!def || !def.createUI) return;
+    const uiFn = def?.createUI || inst?.mountUI;
+    if(!uiFn) return;
 
     const overlay = document.getElementById('fxOverlay');
     if(!overlay) return;
@@ -894,7 +841,10 @@ function openPluginEditor(trackIndex, slotIndex){
     const mount=document.createElement('div');
     modal.appendChild(mount);
 
-    def.createUI(inst, mount);
+    // Support both plugin registry UI (createUI) and instance UI (mountUI)
+    try{ uiFn(inst, mount); }catch(e){
+        try{ if(typeof uiFn === 'function') uiFn(mount); }catch(e2){}
+    }
 
     overlay.appendChild(modal);
 }
@@ -1357,7 +1307,7 @@ Tone.Transport.scheduleRepeat((time) => {
         const currentBar = Math.floor(step / 16); // Assuming standard 4/4 grid logic for arrangement for now
         const stepInBar = step % 16;
 
-        state.playlist.forEach((track, trackIndex) => {
+        state.playlist.forEach(track => {
             track.forEach(clip => {
                 if(currentBar >= clip.startBar && currentBar < clip.startBar + clip.lengthBars) {
                     if(clip.type === 'pattern') {
@@ -1369,7 +1319,7 @@ Tone.Transport.scheduleRepeat((time) => {
                         }
                     } 
                     if(clip.type === 'audio' && currentBar === clip.startBar && stepInBar === 0) {
-                        playAudioClip(clip.id, time, trackIndex);
+                        playAudioClip(clip.id, time);
                     }
                 }
             });
@@ -1399,7 +1349,7 @@ function playPatternStep(grid, stepIdx, time) {
     }
 }
 
-function playAudioClip(id, time, trackIndex) {
+function playAudioClip(id, time) {
             const clipData = state.audioClips[id];
             if (!clipData) return;
 
@@ -1418,7 +1368,7 @@ function playAudioClip(id, time, trackIndex) {
                 src.buffer = rawBuffer;
 
                 // Destination: connect directly to raw destination to avoid Tone wrapper issues in iframes/PWA
-                const t = ensureTrackAudio((typeof trackIndex==='number' && trackIndex>=0) ? trackIndex : 0);
+                const t = ensureTrackAudio(clip.track ?? 0);
             const inNode = (t.input && t.input.input) ? t.input.input : (t.input ? t.input : null);
             if(inNode){ src.connect(inNode); } else { src.connect(ctx.destination); }
 
