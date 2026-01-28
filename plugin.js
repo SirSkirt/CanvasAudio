@@ -20,15 +20,49 @@
       semitones: 0
     };
 
+    // Tone.PitchShift.pitch is a plain number in many Tone.js builds.
+    // To support a "retune" feel without relying on AudioParam ramps,
+    // we implement a small JS ramp that updates node.pitch over time.
+    let _rampTimer = null;
+    let _rampStartT = 0;
+    let _rampFrom = 0;
+    let _rampTo = 0;
+    function stopRamp(){
+      if(_rampTimer){
+        clearInterval(_rampTimer);
+        _rampTimer = null;
+      }
+    }
+    function startRamp(from, to, seconds){
+      stopRamp();
+      _rampStartT = performance.now();
+      _rampFrom = from;
+      _rampTo = to;
+      const durMs = Math.max(10, (seconds || 0.15) * 1000);
+      _rampTimer = setInterval(()=>{
+        const t = (performance.now() - _rampStartT) / durMs;
+        if(t >= 1){
+          node.pitch = _rampTo;
+          stopRamp();
+          return;
+        }
+        node.pitch = _rampFrom + (_rampTo - _rampFrom) * t;
+      }, 33); // ~30fps is enough for audible smoothing
+    }
+
     function setSemitones(semi){
       state.semitones = semi;
-      // Smooth changes using a tiny ramp (retune)
-      try{
-        const now = Tone.now();
-        node.pitch.cancelAndHoldAtTime(now);
-        node.pitch.linearRampToValueAtTime(semi, now + clamp(state.retune, 0.01, 2.0));
-      }catch(e){
-        node.pitch.value = semi;
+
+      // Always set the underlying effect parameter.
+      // Use a simple JS ramp to approximate retune smoothing.
+      const target = semi;
+      const cur = (typeof node.pitch === "number") ? node.pitch : (parseFloat(node.pitch) || 0);
+      const rt = clamp(state.retune, 0.01, 2.0);
+      if(rt <= 0.02){
+        stopRamp();
+        node.pitch = target;
+      }else{
+        startRamp(cur, target, rt);
       }
     }
 
@@ -130,7 +164,8 @@ function mountUI(container){
       mountUI,
       getState: ()=>({ ...state }),
       setState: (s)=>{ setState(s); },
-      setEnabled: (on)=>{ node.wet.value = on ? 1.0 : 0.0; }
+      setEnabled: (on)=>{ try{ node.wet.value = on ? 1.0 : 0.0; }catch(e){} },
+      dispose: ()=>{ stopRamp(); try{ node.dispose(); }catch(e){} }
     };
   }
 

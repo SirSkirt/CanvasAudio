@@ -44,6 +44,7 @@ let state = {
     selectedResId: 'pat1',
     
     playlist: [] 
+    ,playheadStep: 0
 };
 
 // Initialize 8 Tracks
@@ -275,9 +276,28 @@ function init() {
     Tone.Transport.bpm.value = 128;
     // Audio engine starts only after explicit user action via the Audio panel.
     setupAudioStatusPanel();
+    setupPlayheadScrub();
     setupMainMenu();
     setVersionLabel();
 
+}
+
+function setupPlayheadScrub(){
+    const scroll = document.getElementById('playlist-scroll');
+    if(!scroll) return;
+
+    // Click on empty area to move playhead.
+    scroll.addEventListener('mousedown', (e)=>{
+        // Only in SONG mode; also ignore when clicking on a clip (those handle their own drag).
+        if(state.mode !== 'SONG') return;
+        const target = e.target;
+        if(target && (target.classList?.contains('clip') || target.closest?.('.clip'))) return;
+
+        const rect = scroll.getBoundingClientRect();
+        const x = (e.clientX - rect.left) + scroll.scrollLeft;
+        const step = Math.round((x - 120) / 3.75);
+        setPlayheadStep(step);
+    });
 }
 
 
@@ -796,8 +816,13 @@ function removePluginFromTrackSlot(trackIndex, slotIndex){
     if(inst && typeof inst.getState === 'function'){
         try{ state.trackPluginStates[trackIndex][slotIndex] = inst.getState(); }catch(e){}
     }
-    if(inst && inst.node){
-        try{ if(inst.node.dispose) inst.node.dispose(); }catch(e){}
+    if(inst){
+        // Prefer instance-level dispose (lets plugins clear timers, etc.)
+        try{ if(typeof inst.dispose === 'function') inst.dispose(); }catch(e){}
+        // Fallback for legacy instances
+        if(inst.node){
+            try{ if(inst.node.dispose) inst.node.dispose(); }catch(e){}
+        }
     }
     state.trackPlugins[trackIndex][slotIndex] = null;
     rebuildTrackFxChain(trackIndex);
@@ -1131,6 +1156,14 @@ async function togglePlay() {
         stopTransport();
     } else {
 updateBPM(state.bpm);
+        // Start from the current playhead position (SONG mode) instead of forcing step 0.
+        if(state.mode === 'SONG'){
+            if(typeof state.playheadStep !== 'number') state.playheadStep = 0;
+            state.currentStep = Math.max(0, state.playheadStep|0);
+            // If starting mid-song, start any overlapping audio clips at the correct offset.
+            try{ startOverlappingAudioAtPlayhead(Tone.now()); }catch(e){}
+        }
+
         Tone.Transport.start();
         state.isPlaying = true;
         document.getElementById('play-btn').classList.add('active');
@@ -1145,11 +1178,55 @@ function stopTransport() {
     activeSources = [];
 
     state.isPlaying = false;
-    state.currentStep = 0;
+    // Keep playhead where playback stopped.
+    state.playheadStep = Math.max(0, state.currentStep|0);
     document.getElementById('play-btn').classList.remove('active');
     
     document.querySelectorAll('.step.playing').forEach(s => s.classList.remove('playing'));
-    document.getElementById('playhead').style.left = '120px';
+    updatePlayheadUIFromStep(state.playheadStep);
+}
+
+// --- PLAYHEAD (SONG MODE) ---
+function updatePlayheadUIFromStep(step){
+    try{
+        const px = 120 + (step * 3.75);
+        const playhead = document.getElementById('playhead');
+        if(playhead) playhead.style.left = px + 'px';
+    }catch(e){}
+}
+
+function setPlayheadStep(step){
+    step = Math.max(0, step|0);
+    state.playheadStep = step;
+    if(!state.isPlaying){
+        state.currentStep = step;
+        updatePlayheadUIFromStep(step);
+    }
+}
+
+function startOverlappingAudioAtPlayhead(when){
+    if(state.mode !== 'SONG') return;
+    const step = Math.max(0, state.currentStep|0);
+    const secondsPerBar = (60 / state.bpm) * state.timeSig;
+    const secondsPerStep = secondsPerBar / 16;
+
+    const curBar = Math.floor(step / 16);
+    const stepInBar = step % 16;
+    const curTimeSec = (curBar * secondsPerBar) + (stepInBar * secondsPerStep);
+
+    state.playlist.forEach((track, trackIndex)=>{
+        track.forEach(clip=>{
+            if(clip.type !== 'audio') return;
+            const clipData = state.audioClips?.[clip.id];
+            if(!clipData || !clipData.buffer) return;
+            const clipStartSec = (clip.startBar * secondsPerBar);
+            const clipEndSec = clipStartSec + (clip.lengthBars * secondsPerBar);
+            if(curTimeSec >= clipStartSec && curTimeSec < clipEndSec){
+                const offset = Math.max(0, curTimeSec - clipStartSec);
+                playAudioClip(clip.id, when, trackIndex, offset);
+            }
+        });
+    });
 }
 
 function setArmedTrack(trackIndex) {
@@ -1364,7 +1441,7 @@ function playPatternStep(grid, stepIdx, time) {
     }
 }
 
-function playAudioClip(id, time, trackIndex) {
+function playAudioClip(id, time, trackIndex, offsetSeconds) {
             const clipData = state.audioClips[id];
             if (!clipData) return;
 
@@ -1387,7 +1464,8 @@ function playAudioClip(id, time, trackIndex) {
             const inNode = (t.input && t.input.input) ? t.input.input : (t.input ? t.input : null);
             if(inNode){ src.connect(inNode); } else { src.connect(ctx.destination); }
 
-                src.start(when);
+                const off = (typeof offsetSeconds === 'number' && isFinite(offsetSeconds)) ? Math.max(0, offsetSeconds) : 0;
+                try{ src.start(when, off); }catch(e){ src.start(when); }
 
                 // Track active sources so Stop works
                 activeSources.push(src);
