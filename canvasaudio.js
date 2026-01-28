@@ -1,10 +1,10 @@
 /**
  * CanvasAudio Main Logic
- * v0.5.0 - Clean Web Mode
+ * v0.5.1 - FX & Plugin Support
  */
 
 const APP_STAGE = "Alpha";
-const APP_VERSION = "0.5.0";
+const APP_VERSION = "0.5.1";
 window.CA_VERSION = APP_VERSION;
 
 const instruments = [
@@ -65,16 +65,8 @@ let activeSources = [];
 
 // --- TOOL FUNCTIONS ---
 function editTool(action) {
-    if (action === 'paste') {
-        pasteClipAtPlayhead();
-        return;
-    }
-
-    if (!state.selectedClip) {
-        alert("Please select a clip first by clicking on it.");
-        return;
-    }
-
+    if (action === 'paste') { pasteClipAtPlayhead(); return; }
+    if (!state.selectedClip) { alert("Please select a clip first."); return; }
     const { trackIndex, clipIndex } = state.selectedClip;
     const track = state.playlist[trackIndex];
     if (!track || !track[clipIndex]) return;
@@ -82,28 +74,12 @@ function editTool(action) {
 
     switch (action) {
         case 'select': break;
-        case 'delete':
-            track.splice(clipIndex, 1);
-            state.selectedClip = null;
-            renderPlaylist();
-            break;
-        case 'mute':
-            clip.muted = !clip.muted;
-            renderPlaylist();
-            break;
-        case 'split':
-            splitClipAtPlayhead(trackIndex, clipIndex);
-            break;
-        case 'copy':
-            state.clipboard = JSON.parse(JSON.stringify(clip));
-            console.log("Copied to clipboard");
-            break;
-        case 'trimStart':
-            trimClipStart(trackIndex, clipIndex);
-            break;
-        case 'trimEnd':
-            trimClipEnd(trackIndex, clipIndex);
-            break;
+        case 'delete': track.splice(clipIndex, 1); state.selectedClip = null; renderPlaylist(); break;
+        case 'mute': clip.muted = !clip.muted; renderPlaylist(); break;
+        case 'split': splitClipAtPlayhead(trackIndex, clipIndex); break;
+        case 'copy': state.clipboard = JSON.parse(JSON.stringify(clip)); console.log("Copied"); break;
+        case 'trimStart': trimClipStart(trackIndex, clipIndex); break;
+        case 'trimEnd': trimClipEnd(trackIndex, clipIndex); break;
     }
 }
 
@@ -111,25 +87,17 @@ function splitClipAtPlayhead(trackIndex, clipIndex) {
     const track = state.playlist[trackIndex];
     const clip = track[clipIndex];
     const playheadBar = state.currentStep / 16;
-
     if (playheadBar > clip.startBar && playheadBar < (clip.startBar + clip.lengthBars)) {
         const firstLen = playheadBar - clip.startBar;
         const secondLen = clip.lengthBars - firstLen;
         clip.lengthBars = firstLen;
-
         const newClip = JSON.parse(JSON.stringify(clip));
         newClip.startBar = playheadBar;
         newClip.lengthBars = secondLen;
-        
-        if(newClip.type === 'audio') {
-            newClip.offset = (newClip.offset || 0) + (firstLen * (60/state.bpm * state.timeSig));
-        }
-
+        if(newClip.type === 'audio') newClip.offset = (newClip.offset || 0) + (firstLen * (60/state.bpm * state.timeSig));
         track.push(newClip);
         state.selectedClip = null; 
         renderPlaylist();
-    } else {
-        alert("Playhead must be inside the clip to split.");
     }
 }
 
@@ -149,9 +117,7 @@ function trimClipStart(trackIndex, clipIndex) {
         const diff = playheadBar - clip.startBar;
         clip.startBar = playheadBar;
         clip.lengthBars -= diff;
-        if(clip.type === 'audio') {
-            clip.offset = (clip.offset || 0) + (diff * (60/state.bpm * state.timeSig));
-        }
+        if(clip.type === 'audio') clip.offset = (clip.offset || 0) + (diff * (60/state.bpm * state.timeSig));
         renderPlaylist();
     }
 }
@@ -160,33 +126,31 @@ function pasteClipAtPlayhead() {
     if (!state.clipboard) return;
     const playheadBar = state.currentStep / 16;
     const trackIndex = state.selectedClip ? state.selectedClip.trackIndex : 0; 
-    
     const newClip = JSON.parse(JSON.stringify(state.clipboard));
     newClip.startBar = playheadBar;
-    
     state.playlist[trackIndex].push(newClip);
     renderPlaylist();
 }
 
-
-// --- ENVIRONMENT DETECTION (UPDATED) ---
+// --- ENVIRONMENT DETECTION ---
 function checkEnvironment() {
-    // Robust check for Electron environment
-    const isElectron = typeof process !== 'undefined' && 
-                       process.versions && 
-                       process.versions.electron;
-                       
+    const isElectron = typeof process !== 'undefined' && process.versions && process.versions.electron;
     const titleBar = document.getElementById('title-bar');
     const banner = document.getElementById('standalone-banner');
+    const audioPanel = document.getElementById('audioStatusPanel');
 
     if (isElectron) {
         console.log("Running in Standalone Mode");
-        // Show Fiddle features
         if(titleBar) titleBar.style.display = 'flex';
-        // Hide Banner
         if(banner) banner.style.display = 'none';
+        if(audioPanel) audioPanel.style.display = 'none'; // Auto-start audio
         
-        // Wire up window controls
+        setTimeout(() => {
+            if(Tone.context.state !== 'running') {
+                Tone.start().then(() => { console.log("Audio Engine Auto-Started"); state.audioReady = true; });
+            }
+        }, 100);
+
         if (typeof require !== 'undefined') {
             const { ipcRenderer } = require('electron');
             document.getElementById('btn-min')?.addEventListener('click', () => ipcRenderer.send('app/minimize'));
@@ -195,12 +159,8 @@ function checkEnvironment() {
         }
     } else {
         console.log("Running in Browser Mode");
-        // Hide Fiddle features (Title Bar)
         if(titleBar) titleBar.style.display = 'none';
-        
-        // Hide Banner (Clean Web Mode)
-        // We hide this so mobile/web users aren't nagged to download an exe they can't use.
-        if(banner) banner.style.display = 'none';
+        if(banner) banner.style.display = 'none'; // Clean Web Mode
     }
 }
 
@@ -208,8 +168,7 @@ function init() {
     const vEl = document.getElementById('version-label');
     if (vEl) vEl.textContent = `${APP_STAGE} Version ${APP_VERSION}`;
     
-    checkEnvironment(); // Run detection
-    
+    checkEnvironment();
     if(!loadProjectFromStorage()) {}
     generateRuler();
     renderResources();
@@ -587,21 +546,150 @@ async function handleAudioUpload(input) {
         selectResource('audio', id);
     } catch (err) { alert("Error decoding audio file."); }
 }
+
+// --- NEW FX WINDOW LOGIC ---
+
 function openFxWindow(trackIndex){
     const overlay = document.getElementById('fxOverlay');
     const win = document.getElementById('fxWindow');
     if(!overlay || !win) return;
+    
+    // 1. Set Title
     const title = document.getElementById('fxWinTitle');
     if(title) title.innerText = `Effects (Track ${trackIndex + 1})`;
-    const body = document.getElementById('fxWinBody');
-    body.innerHTML = '';
-    for(let i=0; i<10; i++){
-        const slot = document.createElement('div');
-        slot.style.padding = '8px';
-        slot.style.borderBottom = '1px solid #333';
-        slot.innerText = `Slot ${i+1} - (Empty)`;
-        body.appendChild(slot);
+
+    // 2. Populate Plugin List
+    const select = document.getElementById('fxPluginSelect');
+    select.innerHTML = ''; 
+    
+    if(window.CA_PLUGINS) {
+        Object.keys(window.CA_PLUGINS).forEach(key => {
+            const plugin = window.CA_PLUGINS[key];
+            const opt = document.createElement('option');
+            opt.value = key;
+            opt.innerText = plugin.name;
+            select.appendChild(opt);
+        });
+    } else {
+        const opt = document.createElement('option');
+        opt.innerText = "No Plugins Found";
+        select.appendChild(opt);
     }
+
+    // 3. Wire up "Add" Button
+    const addBtn = document.getElementById('fxAddPluginBtn');
+    const newBtn = addBtn.cloneNode(true); // Clear old listeners
+    addBtn.parentNode.replaceChild(newBtn, addBtn);
+    
+    newBtn.onclick = () => {
+        const pluginKey = select.value;
+        if(pluginKey) addPluginToTrack(trackIndex, pluginKey);
+    };
+
+    // 4. Render Slots
+    renderFxSlots(trackIndex);
     overlay.style.display = 'flex';
     document.getElementById('fxCloseBtn').onclick = () => overlay.style.display = 'none';
+}
+
+function renderFxSlots(trackIndex) {
+    const body = document.getElementById('fxWinBody');
+    body.innerHTML = '';
+    
+    if (!state.trackFxSlots[trackIndex]) {
+        state.trackFxSlots[trackIndex] = Array(10).fill(null);
+    }
+
+    state.trackFxSlots[trackIndex].forEach((slot, slotIndex) => {
+        const row = document.createElement('div');
+        row.style.cssText = "padding: 8px; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center;";
+        
+        if (slot) {
+            const left = document.createElement('div');
+            const name = document.createElement('span');
+            name.innerText = `${slotIndex + 1}. ${slot.name}`;
+            name.style.color = "#ff9800";
+            name.style.marginRight = "10px";
+
+            // UI Button for Plugin (if it has custom UI)
+            if(slot.node.mountUI) {
+                const uiBtn = document.createElement('button');
+                uiBtn.innerText = "⚙";
+                uiBtn.style.cssText = "background:none; border:none; color:#bbb; cursor:pointer;";
+                uiBtn.onclick = () => {
+                    // Quick modal for plugin UI
+                    const uiDiv = document.createElement('div');
+                    uiDiv.style.cssText = "margin-top:5px; background:#222; padding:5px; border-radius:4px;";
+                    slot.node.mountUI(uiDiv);
+                    if(!row.querySelector('.plugin-ui-box')) {
+                        uiDiv.className = 'plugin-ui-box';
+                        row.appendChild(uiDiv);
+                    } else {
+                        row.querySelector('.plugin-ui-box').remove();
+                    }
+                };
+                left.appendChild(uiBtn);
+            }
+            left.appendChild(name);
+
+            const removeBtn = document.createElement('button');
+            removeBtn.innerText = "X";
+            removeBtn.style.cssText = "background: #d32f2f; color: white; border: none; border-radius: 4px; padding: 2px 8px; cursor: pointer;";
+            removeBtn.onclick = () => removePluginFromTrack(trackIndex, slotIndex);
+            
+            row.appendChild(left);
+            row.appendChild(removeBtn);
+        } else {
+            const name = document.createElement('span');
+            name.innerText = `${slotIndex + 1}. (Empty)`;
+            name.style.color = "#666";
+            row.appendChild(name);
+        }
+        body.appendChild(row);
+    });
+}
+
+function addPluginToTrack(trackIndex, pluginKey) {
+    const registryItem = window.CA_PLUGINS[pluginKey];
+    if(!registryItem) return;
+    const slots = state.trackFxSlots[trackIndex];
+    const emptyIndex = slots.findIndex(s => s === null);
+    if (emptyIndex === -1) { alert("No empty slots!"); return; }
+
+    const node = registryItem.create(Tone);
+    slots[emptyIndex] = { name: registryItem.name, type: pluginKey, node: node };
+    updateTrackAudioChain(trackIndex);
+    renderFxSlots(trackIndex);
+}
+
+function removePluginFromTrack(trackIndex, slotIndex) {
+    const slot = state.trackFxSlots[trackIndex][slotIndex];
+    if (slot && slot.node) {
+        if(slot.node.dispose) slot.node.dispose();
+    }
+    state.trackFxSlots[trackIndex][slotIndex] = null;
+    updateTrackAudioChain(trackIndex);
+    renderFxSlots(trackIndex);
+}
+
+function updateTrackAudioChain(trackIndex) {
+    const track = ensureTrackAudio(trackIndex);
+    const slots = state.trackFxSlots[trackIndex];
+    track.input.disconnect();
+    let currentNode = track.input;
+
+    slots.forEach(slot => {
+        if (slot && slot.node) {
+            // Advanced Node (Separate Input/Output)
+            if (slot.node.input && slot.node.output) {
+                currentNode.connect(slot.node.input);
+                currentNode = slot.node.output;
+            } else {
+                // Simple Node
+                currentNode.connect(slot.node);
+                currentNode = slot.node;
+            }
+        }
+    });
+    currentNode.connect(track.pan);
 }
