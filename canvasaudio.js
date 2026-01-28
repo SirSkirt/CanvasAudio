@@ -1,8 +1,11 @@
-// canvasaudio.js - Main Application Logic (v0.4.1)
+/**
+ * CanvasAudio Main Logic
+ * v0.4.2 - Fixed Missing Init Functions
+ */
 
 // --- APP VERSION ---
 const APP_STAGE = "Alpha";
-const APP_VERSION = "0.4.1";
+const APP_VERSION = "0.4.2";
 window.CA_VERSION = APP_VERSION;
 
 // --- CONSTANTS ---
@@ -33,13 +36,11 @@ let state = {
     trackInputDeviceIds: Array(8).fill(null),
     trackFxSlots: Array.from({length: 8}, () => Array(10).fill(null)),
     trackFxSlotEnabled: Array.from({length: 8}, () => Array(10).fill(true)),
-    recordingStartPerf: 0,
-    recordingTimer: null,
     
     // Data
     patterns: { 'pat1': { id:'pat1', name: "Pattern 1", grid: createEmptyGrid(4) } },
     audioClips: {}, 
-    playlist: [],
+    playlist: [], // Array of 8 tracks
     
     // Selection
     selectedResType: 'pattern',
@@ -81,7 +82,7 @@ clapSynth.volume.value = -10;
 
 let activeSources = [];
 
-// --- ENVIRONMENT CHECK (NEW) ---
+// --- ENVIRONMENT CHECK ---
 function checkEnvironment() {
     // Check for Electron
     const isElectron = typeof process !== 'undefined' && process.versions && process.versions.electron;
@@ -91,25 +92,17 @@ function checkEnvironment() {
 
     if (isElectron) {
         console.log("Running in Standalone Mode");
-        // Show custom title bar
         if(titleBar) titleBar.style.display = 'flex';
-        // Hide web banner
         if(banner) banner.style.display = 'none';
-
-        // Initialize Electron Window Controls
         setupElectronControls();
     } else {
         console.log("Running in Browser Mode");
-        // Hide custom title bar (let browser handle it)
         if(titleBar) titleBar.style.display = 'none';
-        
-        // Show "Download Standalone" Banner
         if(banner) banner.style.display = 'flex';
     }
 }
 
 function setupElectronControls() {
-    // We check for 'require' to avoid errors in browser
     if (typeof require !== 'undefined') {
         const { ipcRenderer } = require('electron');
         document.getElementById('btn-min')?.addEventListener('click', () => ipcRenderer.send('app/minimize'));
@@ -123,27 +116,95 @@ function init() {
     const vEl = document.getElementById('version-label');
     if (vEl) vEl.textContent = `${APP_STAGE} Version ${APP_VERSION}`;
 
-    // Environment Check
     checkEnvironment();
     
-    // Autosave Load
+    // Try load autosave
     if(!loadProjectFromStorage()) {
-        // Defaults if new
+        // Defaults loaded by state init
     }
 
     generateRuler();
     renderResources();
     renderPlaylist();
     renderChannelRack();
-    renderMixerUI(); // Ensure mixer state exists
+    renderMixerUI(); 
     
     selectResource('pattern', 'pat1');
-    Tone.Transport.bpm.value = 128;
+    Tone.Transport.bpm.value = state.bpm;
     
+    // THESE WERE MISSING OR UNDEFINED IN YOUR PREVIOUS FILE
     setupAudioStatusPanel();
     setupPlayheadScrub();
     setupMainMenu();
     setVersionLabel();
+}
+
+// --- MISSING FUNCTIONS (Restored) ---
+
+function setupAudioStatusPanel(){
+    const btn = document.getElementById('audioToggleBtn');
+    const text = document.getElementById('audioStatusText');
+
+    const updateUI = () => {
+        const ready = (Tone.context && Tone.context.state === 'running');
+        state.audioReady = ready;
+        if(text) text.innerText = ready ? "Audio Ready" : "Audio Not Ready";
+        if(btn) btn.innerText = ready ? "Stop" : "Start";
+        if(ready) btn?.classList.add('active');
+        else btn?.classList.remove('active');
+    };
+
+    if(btn){
+        btn.onclick = async () => {
+            if(state.audioReady) {
+                if(Tone.Transport.state === 'started') stopTransport();
+                await Tone.context.suspend();
+            } else {
+                await Tone.start();
+            }
+            updateUI();
+        };
+    }
+    updateUI();
+}
+
+function setupPlayheadScrub(){
+    const scroll = document.getElementById('playlist-scroll');
+    if(!scroll) return;
+
+    scroll.addEventListener('mousedown', (e)=>{
+        if(state.mode !== 'SONG') return;
+        // Ignore clicks on clips
+        if(e.target.classList.contains('clip') || e.target.closest('.clip')) return;
+
+        const rect = scroll.getBoundingClientRect();
+        const x = (e.clientX - rect.left) + scroll.scrollLeft;
+        // 120px is header width, 3.75px per step (60px per bar / 16 steps)
+        const step = Math.round((x - 120) / 3.75);
+        
+        state.playheadStep = Math.max(0, step);
+        state.currentStep = state.playheadStep;
+        
+        const ph = document.getElementById('playhead');
+        if(ph) ph.style.left = (120 + (state.playheadStep * 3.75)) + 'px';
+    });
+}
+
+function setupMainMenu(){
+    const overlay = document.getElementById('mainMenuOverlay');
+    if(!overlay) return;
+    
+    // Simple close logic for now
+    const close = () => overlay.style.display = 'none';
+    
+    document.getElementById('menuNewProject')?.addEventListener('click', close);
+    document.getElementById('menuOpenProject')?.addEventListener('click', close);
+    document.getElementById('menuRecentProject')?.addEventListener('click', close);
+}
+
+function setVersionLabel(){
+    const el = document.getElementById('version-label');
+    if(el) el.innerText = `${APP_STAGE} v${APP_VERSION}`;
 }
 
 // --- MIXER UI ---
@@ -207,7 +268,7 @@ function renderMixerUI(){
         meter.className = 'vert-meter';
         const fill = document.createElement('div');
         fill.className = 'meter-fill';
-        fill.style.height = (state.mixer.volumes[i] * 100) + '%'; // Visual approx
+        fill.style.height = (state.mixer.volumes[i] * 100) + '%'; 
         meter.appendChild(fill);
         
         const vol = document.createElement('input');
@@ -231,12 +292,10 @@ function ensureTrackAudio(trackIndex){
     state._audioTracks = state._audioTracks || Array(8).fill(null);
     if(state._audioTracks[trackIndex]) return state._audioTracks[trackIndex];
 
-    // Create Nodes
     const input = new Tone.Gain(1);
     const pan = new Tone.Panner(0);
     const vol = new Tone.Gain(1);
     
-    // Chain: Input -> [Plugins] -> Pan -> Vol -> Destination
     input.connect(pan);
     pan.connect(vol);
     vol.toDestination();
@@ -244,16 +303,13 @@ function ensureTrackAudio(trackIndex){
     const track = { input, pan, vol };
     state._audioTracks[trackIndex] = track;
     
-    // Initialize mixer state
     applyMixerToAudio(trackIndex);
-    
     return track;
 }
 
 function applyMixerToAudio(trackIndex){
     const t = state._audioTracks?.[trackIndex];
     if(!t) return;
-    
     const m = state.mixer;
     t.vol.gain.value = m.mutes[trackIndex] ? 0 : m.volumes[trackIndex];
     t.pan.pan.value = m.pans[trackIndex];
@@ -267,7 +323,7 @@ async function togglePlay() {
         await Tone.start();
         Tone.Transport.start();
         state.isPlaying = true;
-        document.getElementById('play-btn').classList.add('active');
+        document.getElementById('play-btn')?.classList.add('active');
     }
 }
 
@@ -276,9 +332,7 @@ function stopTransport() {
     activeSources.forEach(s => { try{s.stop()}catch(e){} });
     activeSources = [];
     state.isPlaying = false;
-    document.getElementById('play-btn').classList.remove('active');
-    
-    // Visual reset
+    document.getElementById('play-btn')?.classList.remove('active');
     document.querySelectorAll('.step.playing').forEach(s => s.classList.remove('playing'));
 }
 
@@ -307,7 +361,7 @@ function loadProjectFromStorage() {
         return true;
     } catch(e) { return false; }
 }
-setInterval(saveProjectToStorage, 30000); // 30s autosave
+setInterval(saveProjectToStorage, 30000); 
 
 // --- HELPER FUNCTIONS ---
 function createEmptyGrid(beats) {
@@ -333,28 +387,33 @@ function selectResource(type, id) {
 
 function renderResources() {
     const pList = document.getElementById('pattern-list');
-    pList.innerHTML = '';
-    Object.values(state.patterns).forEach(p => {
-        const d = document.createElement('div');
-        d.className = `resource-item ${state.selectedResId === p.id ? 'selected' : ''}`;
-        d.innerText = p.name;
-        d.onclick = () => selectResource('pattern', p.id);
-        pList.appendChild(d);
-    });
+    if(pList) {
+        pList.innerHTML = '';
+        Object.values(state.patterns).forEach(p => {
+            const d = document.createElement('div');
+            d.className = `resource-item ${state.selectedResId === p.id ? 'selected' : ''}`;
+            d.innerText = p.name;
+            d.onclick = () => selectResource('pattern', p.id);
+            pList.appendChild(d);
+        });
+    }
 
     const aList = document.getElementById('audio-list');
-    aList.innerHTML = '';
-    Object.values(state.audioClips).forEach(c => {
-        const d = document.createElement('div');
-        d.className = `resource-item audio-type ${state.selectedResId === c.id ? 'selected' : ''}`;
-        d.innerHTML = `<i class="fas fa-wave-square"></i> ${c.name}`;
-        d.onclick = () => selectResource('audio', c.id);
-        aList.appendChild(d);
-    });
+    if(aList) {
+        aList.innerHTML = '';
+        Object.values(state.audioClips).forEach(c => {
+            const d = document.createElement('div');
+            d.className = `resource-item audio-type ${state.selectedResId === c.id ? 'selected' : ''}`;
+            d.innerHTML = `<i class="fas fa-wave-square"></i> ${c.name}`;
+            d.onclick = () => selectResource('audio', c.id);
+            aList.appendChild(d);
+        });
+    }
 }
 
 function generateRuler() {
     const r = document.getElementById('ruler');
+    if(!r) return;
     r.innerHTML = '';
     for(let i=1; i<=50; i++){
         const d = document.createElement('div');
@@ -365,18 +424,19 @@ function generateRuler() {
 
 function renderPlaylist() {
     const c = document.getElementById('playlist-tracks');
+    if(!c) return;
     c.innerHTML = '';
     state.playlist.forEach((clips, idx) => {
         const row = document.createElement('div');
         row.className = 'track-row';
         
-        // Header
         const h = document.createElement('div');
         h.className = 'track-header';
-        h.innerHTML = `<div>Track ${idx+1}</div>`; // Simplified for brevity
+        h.innerHTML = `<div class="track-buttons">
+            <button class="track-btn" onclick="openFxWindow(${idx})">FX</button>
+        </div> Track ${idx+1}`; 
         row.appendChild(h);
         
-        // Lane
         const l = document.createElement('div');
         l.className = 'track-lane';
         l.onclick = (e) => {
@@ -385,7 +445,6 @@ function renderPlaylist() {
             addClipToTrack(idx, bar);
         };
 
-        // Clips
         clips.forEach(clip => {
             const el = document.createElement('div');
             el.className = `clip ${clip.type === 'pattern' ? 'clip-pattern' : 'clip-audio'}`;
@@ -406,13 +465,14 @@ function addClipToTrack(trackIdx, startBar) {
         type: state.selectedResType,
         id: state.selectedResId,
         startBar: startBar,
-        lengthBars: state.selectedResType === 'pattern' ? 1 : 2 // simplified
+        lengthBars: state.selectedResType === 'pattern' ? 1 : 2
     });
     renderPlaylist();
 }
 
 function renderChannelRack() {
     const c = document.getElementById('rack-rows');
+    if(!c) return;
     if(state.selectedResType !== 'pattern') { c.innerHTML = ''; return; }
     
     const grid = state.patterns[state.selectedResId].grid;
@@ -475,3 +535,52 @@ function playInst(idx, time) {
 
 // Load
 window.addEventListener('load', init);
+
+// --- IMPORT HANDLING (Restored) ---
+async function handleAudioUpload(input) {
+    const file = input.files[0];
+    if(!file) return;
+    const id = 'audio' + Date.now();
+    try {
+        const arrayBuffer = await file.arrayBuffer();
+        const audioBuffer = await Tone.context.rawContext.decodeAudioData(arrayBuffer);
+        state.audioClips[id] = {
+            id,
+            name: file.name,
+            buffer: audioBuffer,
+            duration: audioBuffer.duration
+        };
+        renderResources();
+        selectResource('audio', id);
+        console.log("Audio decoded successfully!");
+    } catch (err) {
+        console.error("Decoding error:", err);
+        alert("Error decoding audio file.");
+    }
+}
+
+// --- FX WINDOW (Partial wiring for existing HTML) ---
+function openFxWindow(trackIndex){
+    const overlay = document.getElementById('fxOverlay');
+    const win = document.getElementById('fxWindow');
+    if(!overlay || !win) {
+        console.warn('FX window DOM missing');
+        return;
+    }
+    const title = document.getElementById('fxWinTitle');
+    if(title) title.innerText = `Effects (Track ${trackIndex + 1})`;
+    
+    // Populate simple slot list (placeholder)
+    const body = document.getElementById('fxWinBody');
+    body.innerHTML = '';
+    for(let i=0; i<10; i++){
+        const slot = document.createElement('div');
+        slot.style.padding = '8px';
+        slot.style.borderBottom = '1px solid #333';
+        slot.innerText = `Slot ${i+1} - (Empty)`;
+        body.appendChild(slot);
+    }
+    
+    overlay.style.display = 'flex';
+    document.getElementById('fxCloseBtn').onclick = () => overlay.style.display = 'none';
+}
