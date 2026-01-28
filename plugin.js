@@ -1,10 +1,10 @@
-// CanvasAudio Plugin Registry (simple, no build step)
+[cite_start][cite: 5] // CanvasAudio Plugin Registry (simple, no build step)
 (function(){
   const PLUGINS = [];
 
   // AutoTune plugin (from autotune.js): real-time pitch detection + correction (chromatic snap)
   // NOTE: This is "live" pitch correction, not offline rendering.
-    // AutoTune plugin (simplified) inspired by common pitch-correction design:
+  // AutoTune plugin (simplified) inspired by common pitch-correction design:
   // 1) Track fundamental pitch in (near) real time
   // 2) Map to nearest note in selected Key/Scale with hysteresis (note tracking)
   // 3) Apply smoothed pitch-shift toward target (Retune) with optional Humanize on sustained notes
@@ -31,12 +31,6 @@
     function keyNameToPc(name){
       const i = NOTE_NAMES.indexOf(name);
       return i >= 0 ? i : 0;
-    }
-
-    function getNoteName(midi){
-      const octave = Math.floor(midi / 12) - 1;
-      const noteIndex = pc(midi);
-      return NOTE_NAMES[noteIndex] + octave;
     }
 
     function buildAllowedPcSet(keyPc, intervals){
@@ -139,397 +133,191 @@
     const state = {
       key: "C",
       scale: "Chromatic",
-      // Retune speed in seconds: smaller = faster/harder (Antares style)
-      retune: 0.07,
-      // Humanize 0..1: more humanize = gentler on sustained notes
+      // Retune speed in seconds: smaller = faster/harder
+      retune: 0.05, 
       humanize: 0.0,
-      gateDb: -30,
+      gateDb: -40, // Lowered default threshold to prevent cutting off quiet tails
       enabled: true
     };
 
     const inputNode = new Tone.Gain(1);
-    const gate = new Tone.Gate(state.gateDb, 0.2);
+    const gate = new Tone.Gate(state.gateDb, 0.1); 
 
-    // PitchShift artifacts are reduced if windowSize in 0.03..0.1 (Tone docs)
+    // Tone.PitchShift: Increased windowSize to 0.1 to reduce "grainy" popping artifacts
     const pitchShift = new Tone.PitchShift({
       pitch: 0,
-      windowSize: 0.08,
+      windowSize: 0.1, 
       delayTime: 0,
       feedback: 0
     });
-    try{ pitchShift.wet.value = 1; }catch(e){}
 
-    // Tap AFTER gate so silence doesn't confuse detection
-    const analyser = new Tone.Analyser("waveform", 4096);
+    // Analyzer for detection
+    const analyser = new Tone.Analyser("waveform", 2048); // Smaller buffer for faster reaction
 
+    // Routing
     inputNode.connect(gate);
     gate.connect(pitchShift);
-    gate.connect(analyser);
+    
+    // Analyze the raw input (pre-shift) for better tracking
+    inputNode.connect(analyser);
 
     const outputNode = pitchShift;
 
-    // --- Tracking + smoothing ---
+    // --- Tracking variables ---
     let running = false;
     let timerId = null;
+    let targetMidi = null;       
+    let currentShift = 0;         
 
-    let lastFreq = -1;
-    let lastMidi = null;
-
-    let targetMidi = null;        // tracked target note (with hysteresis)
-    let lockedSince = 0;          // ms timestamp when target locked
-    let currentShift = 0;         // semitones
-    let lastUpdateTs = 0;
-
-    function setShiftSmooth(targetShift, dtSec){
-      // Retune is "time to move most of the way" to target.
-      const baseT = clamp(state.retune, 0.005, 0.5);
-
-      // Humanize: only applies when holding the same target note for a bit
-      const now = performance.now();
-      const heldMs = targetMidi !== null ? (now - lockedSince) : 0;
-
-      // If sustained note (>250ms), slow down correction by up to ~6x when humanize=1
-      const human = clamp(state.humanize, 0, 1);
-      const sustainFactor = (heldMs > 250) ? (1 + human * 5) : 1;
-
-      const T = baseT * sustainFactor;
-      const alpha = 1 - Math.exp(-dtSec / (T || 0.001));
-
-      currentShift = currentShift + (targetShift - currentShift) * alpha;
-
-      // Apply (best-effort across Tone versions)
-      try{
-        if(pitchShift.pitch && typeof pitchShift.pitch.rampTo === "function"){
-          pitchShift.pitch.rampTo(currentShift, Math.min(0.05, T));
-        }else if(typeof pitchShift.pitch === "number"){
-          pitchShift.pitch = currentShift;
-        }else if(pitchShift.pitch && typeof pitchShift.pitch === "object" && "value" in pitchShift.pitch){
-          pitchShift.pitch.value = currentShift;
-        }
-      }catch(e){}
-    }
+    // The update loop now runs at a fixed, reasonable rate (30ms ~ 33Hz)
+    // We let the Tone.rampTo handle the smoothing between updates.
+    const UPDATE_RATE_MS = 30;
 
     function update(){
-      if(!running) return;
-      const now = performance.now();
-      const dtSec = lastUpdateTs ? ((now - lastUpdateTs)/1000) : 0.03;
-      lastUpdateTs = now;
+      if(!running || !state.enabled) return;
 
       try{
         const buf = analyser.getValue();
+        // Use current context sample rate
         const {freq, confidence} = yinDetect(buf, Tone.context.sampleRate);
 
-        if(freq === -1 || confidence < 0.5){
-          // No reliable pitch: decay correction toward 0 smoothly to avoid zipper noise
-          setShiftSmooth(0, dtSec);
-          lastFreq = -1;
-          lastMidi = null;
-          return;
+        // If no confident pitch found, relax pitch shift back to 0
+        if(freq === -1 || confidence < 0.4){ 
+           // Slow relaxation to neutral to avoid drop-out pops
+           pitchShift.pitch.rampTo(0, 0.2);
+           targetMidi = null;
+           return;
         }
-
-        // Median-ish smoothing: limit implausible jumps frame-to-frame
-        if(lastFreq > 0){
-          const ratio = freq / lastFreq;
-          if(ratio > 1.35 || ratio < 0.74){
-            // discard very large single-frame jumps (often octave errors)
-            return;
-          }
-        }
-        lastFreq = freq;
 
         const midiFloat = freqToMidi(freq);
-        lastMidi = midiFloat;
-
         const intervals = SCALE_INTERVALS[state.scale] || SCALE_INTERVALS["Chromatic"];
         const allowedPc = buildAllowedPcSet(keyNameToPc(state.key), intervals);
 
-        // Hysteresis / note tracking:
-        // If we already have a target note, keep it unless we move well past the midpoint
-        // to a different allowed note. This prevents rapid toggling (clicks/pops).
-        if(targetMidi === null){
-          targetMidi = nearestAllowedMidi(midiFloat, allowedPc);
-          lockedSince = now;
-        }else{
-          const near = nearestAllowedMidi(midiFloat, allowedPc);
-
-          if(near !== targetMidi){
-            // Midpoint test in semitones
-            const mid = (near + targetMidi) / 2;
-            const distToTarget = Math.abs(midiFloat - targetMidi);
-            const distToNear = Math.abs(midiFloat - near);
-
-            // Switch only if clearly closer to the new note AND we've crossed midpoint
-            if(distToNear + 0.10 < distToTarget && ((targetMidi < near && midiFloat > mid) || (targetMidi > near && midiFloat < mid))){
-              targetMidi = near;
-              lockedSince = now;
-            }
-          }
+        // Hysteresis: Don't switch target note until we are significantly closer to a new one
+        // This prevents "flickering" between two semitones
+        let newTarget = nearestAllowedMidi(midiFloat, allowedPc);
+        
+        if (targetMidi !== null && newTarget !== targetMidi) {
+             // Only switch if we are clearly closer to the new target (0.4 semitone buffer)
+             if (Math.abs(midiFloat - newTarget) > Math.abs(midiFloat - targetMidi) - 0.2) {
+                 newTarget = targetMidi; // Stick to old note
+             }
         }
+        targetMidi = newTarget;
 
+        // Calculate shift
         let desiredShift = targetMidi - midiFloat;
 
-        // Micro-correction deadband (keeps natural vibrato)
-        const deadband = 0.08 + clamp(state.humanize, 0, 1) * 0.10; // semitones
-        if(Math.abs(desiredShift) < deadband) desiredShift = 0;
+        // Clamp extreme shifts to avoid massive glitches (Tone.PitchShift limitation)
+        if (desiredShift > 12) desiredShift = 12;
+        if (desiredShift < -12) desiredShift = -12;
 
-        // Humanize also reduces overall correction strength a bit (more natural)
-        const strength = 1 - clamp(state.humanize, 0, 1) * 0.45; // keep at least ~55%
-        desiredShift *= strength;
+        // Apply shift with smoothing (Retune Speed)
+        // We use the retune speed as the ramp time. 
+        // 0.01s = Robotic, 0.2s = Natural
+        const rampTime = Math.max(0.01, state.retune);
+        pitchShift.pitch.rampTo(desiredShift, rampTime);
 
-        // Clamp extreme shifts (Tone.PitchShift artifacts explode on big intervals)
-        desiredShift = clamp(desiredShift, -6, 6);
-
-        if(state.enabled){
-          setShiftSmooth(desiredShift, dtSec);
-        }else{
-          setShiftSmooth(0, dtSec);
-        }
-      }catch(e){}
-    }
-
-    function rescheduleTimer(){
-      if(!running) return;
-      if(timerId){ clearInterval(timerId); timerId = null; }
-      const ms = clamp(Math.round(state.retune * 1000), 8, 20);
-      timerId = setInterval(update, ms);
+      }catch(e){
+        console.warn("Autotune error", e);
+      }
     }
 
     function start(){
       if(running) return;
       running = true;
-      lastFreq = -1;
-      lastMidi = null;
-      targetMidi = null;
-      currentShift = 0;
-      lockedSince = performance.now();
-      lastUpdateTs = 0;
-      // Update rate: faster retune => faster updates (more T-Pain-like).
-      // Keep bounds to avoid excessive CPU/zipper noise.
-      const intervalMs = (function(){
-        const ms = Math.round(state.retune * 1000); // retune is seconds
-        return clamp(ms, 8, 20);
-      })();
-      timerId = setInterval(update, intervalMs);
+      // Fixed update rate prevents "stuttering" caused by varying timer intervals
+      timerId = setInterval(update, UPDATE_RATE_MS);
     }
 
     function stop(){
       running = false;
       if(timerId){ clearInterval(timerId); timerId = null; }
-      // reset correction smoothly
       try{
-        if(pitchShift.pitch && typeof pitchShift.pitch.rampTo === "function"){
-          pitchShift.pitch.rampTo(0, 0.05);
-        }else if(typeof pitchShift.pitch === "number"){
-          pitchShift.pitch = 0;
-        }else if(pitchShift.pitch && typeof pitchShift.pitch === "object" && "value" in pitchShift.pitch){
-          pitchShift.pitch.value = 0;
-        }
+        pitchShift.pitch.rampTo(0, 0.1);
       }catch(e){}
     }
 
     function getState(){
-      return {
-        key: state.key,
-        scale: state.scale,
-        retune: state.retune,
-        humanize: state.humanize,
-        gateDb: state.gateDb,
-        enabled: state.enabled
-      };
+      return { ...state };
     }
 
     function setState(s){
       if(!s) return;
       if(typeof s.key === "string") state.key = s.key;
       if(typeof s.scale === "string") state.scale = s.scale;
-      if(typeof s.retune === "number") state.retune = clamp(s.retune, 0.005, 0.5);
-      rescheduleTimer();
-      if(typeof s.humanize === "number") state.humanize = clamp(s.humanize, 0, 1);
-      if(typeof s.gateDb === "number") state.gateDb = s.gateDb;
+      if(typeof s.retune === "number") state.retune = clamp(s.retune, 0.01, 0.4);
+      if(typeof s.gateDb === "number") {
+          state.gateDb = s.gateDb;
+          try{ gate.threshold.value = state.gateDb; }catch(e){}
+      }
       if(typeof s.enabled === "boolean") state.enabled = s.enabled;
-      try{ gate.threshold.value = state.gateDb; }catch(e){}
     }
 
     function mountUI(container){
       container.innerHTML = "";
-
       const wrap = document.createElement("div");
       wrap.className = "plugin-ui";
 
-      const row1 = document.createElement("div");
-      row1.style.display = "flex";
-      row1.style.gap = "10px";
-      row1.style.alignItems = "center";
-      row1.style.flexWrap = "wrap";
+      // Helper to create rows
+      const createRow = () => {
+          const r = document.createElement("div");
+          r.style.cssText = "display:flex; gap:10px; align-items:center; margin-bottom:10px;";
+          return r;
+      };
 
-      // Key selector
-      const keyLabel = document.createElement("label");
-      keyLabel.textContent = "Key";
-      keyLabel.style.display = "flex";
-      keyLabel.style.gap = "6px";
-      keyLabel.style.alignItems = "center";
-
+      // 1. Key & Scale
+      const row1 = createRow();
+      
       const keySel = document.createElement("select");
-      for(const n of NOTE_NAMES){
-        const opt = document.createElement("option");
-        opt.value = n;
-        opt.textContent = n;
-        keySel.appendChild(opt);
-      }
+      NOTE_NAMES.forEach(n => {
+          const opt = document.createElement("option");
+          opt.value = n; opt.textContent = n;
+          keySel.appendChild(opt);
+      });
       keySel.value = state.key;
       keySel.onchange = () => { state.key = keySel.value; };
-
-      keyLabel.appendChild(keySel);
-      row1.appendChild(keyLabel);
-
-      // Scale selector
-      const scaleLabel = document.createElement("label");
-      scaleLabel.textContent = "Scale";
-      scaleLabel.style.display = "flex";
-      scaleLabel.style.gap = "6px";
-      scaleLabel.style.alignItems = "center";
-
+      
       const scaleSel = document.createElement("select");
-      for(const name of Object.keys(SCALE_INTERVALS)){
-        const opt = document.createElement("option");
-        opt.value = name;
-        opt.textContent = name;
-        scaleSel.appendChild(opt);
-      }
+      Object.keys(SCALE_INTERVALS).forEach(n => {
+          const opt = document.createElement("option");
+          opt.value = n; opt.textContent = n;
+          scaleSel.appendChild(opt);
+      });
       scaleSel.value = state.scale;
       scaleSel.onchange = () => { state.scale = scaleSel.value; };
 
-      scaleLabel.appendChild(scaleSel);
-      row1.appendChild(scaleLabel);
-
+      row1.appendChild(document.createTextNode("Key:"));
+      row1.appendChild(keySel);
+      row1.appendChild(document.createTextNode("Scale:"));
+      row1.appendChild(scaleSel);
       wrap.appendChild(row1);
 
-      // Retune
-      const retuneRow = document.createElement("div");
-      retuneRow.style.marginTop = "10px";
-      const retuneLbl = document.createElement("label");
-      retuneLbl.textContent = "Retune";
-      retuneLbl.style.display = "flex";
-      retuneLbl.style.alignItems = "center";
-      retuneLbl.style.gap = "8px";
-
-      const retune = document.createElement("input");
-      retune.type = "range";
-      retune.min = "0.005";
-      retune.max = "0.25";
-      retune.step = "0.005";
-      retune.value = String(state.retune);
-
-      const retuneVal = document.createElement("span");
-      retuneVal.textContent = state.retune.toFixed(3) + "s";
-
-      retune.oninput = () => {
-        state.retune = parseFloat(retune.value);
-        retuneVal.textContent = state.retune.toFixed(3) + "s";
-        rescheduleTimer();
+      // 2. Retune Speed
+      const row2 = createRow();
+      const spdInput = document.createElement("input");
+      spdInput.type = "range"; spdInput.min = "0.01"; spdInput.max = "0.4"; spdInput.step = "0.01";
+      spdInput.value = state.retune;
+      const spdLabel = document.createElement("span");
+      spdLabel.textContent = (state.retune * 1000).toFixed(0) + " ms";
+      
+      spdInput.oninput = () => {
+          state.retune = parseFloat(spdInput.value);
+          spdLabel.textContent = (state.retune * 1000).toFixed(0) + " ms";
       };
 
-      retuneLbl.appendChild(retune);
-      retuneLbl.appendChild(retuneVal);
-      retuneRow.appendChild(retuneLbl);
-      wrap.appendChild(retuneRow);
+      row2.appendChild(document.createTextNode("Speed:"));
+      row2.appendChild(spdInput);
+      row2.appendChild(spdLabel);
+      wrap.appendChild(row2);
 
-      // Humanize
-      const humRow = document.createElement("div");
-      humRow.style.marginTop = "10px";
-      const humLbl = document.createElement("label");
-      humLbl.textContent = "Humanize";
-      humLbl.style.display = "flex";
-      humLbl.style.alignItems = "center";
-      humLbl.style.gap = "8px";
-
-      const hum = document.createElement("input");
-      hum.type = "range";
-      hum.min = "0";
-      hum.max = "1";
-      hum.step = "0.01";
-      hum.value = String(state.humanize);
-
-      const humVal = document.createElement("span");
-      humVal.textContent = Math.round(state.humanize * 100) + "%";
-
-      hum.oninput = () => {
-        state.humanize = parseFloat(hum.value);
-        humVal.textContent = Math.round(state.humanize * 100) + "%";
-      };
-
-      humLbl.appendChild(hum);
-      humLbl.appendChild(humVal);
-      humRow.appendChild(humLbl);
-      wrap.appendChild(humRow);
-
-      // Gate
-      const gateRow = document.createElement("div");
-      gateRow.style.marginTop = "10px";
-      const gateLbl = document.createElement("label");
-      gateLbl.textContent = "Gate";
-      gateLbl.style.display = "flex";
-      gateLbl.style.alignItems = "center";
-      gateLbl.style.gap = "8px";
-
-      const gateSlider = document.createElement("input");
-      gateSlider.type = "range";
-      gateSlider.min = "-60";
-      gateSlider.max = "-10";
-      gateSlider.step = "1";
-      gateSlider.value = String(state.gateDb);
-
-      const gateVal = document.createElement("span");
-      gateVal.textContent = state.gateDb + " dB";
-
-      gateSlider.oninput = () => {
-        state.gateDb = parseInt(gateSlider.value, 10);
-        gateVal.textContent = state.gateDb + " dB";
-        try{ gate.threshold.value = state.gateDb; }catch(e){}
-      };
-
-      gateLbl.appendChild(gateSlider);
-      gateLbl.appendChild(gateVal);
-      gateRow.appendChild(gateLbl);
-      wrap.appendChild(gateRow);
-
-      // Enabled
-      const enRow = document.createElement("div");
-      enRow.style.marginTop = "10px";
-      const en = document.createElement("input");
-      en.type = "checkbox";
-      en.checked = !!state.enabled;
-      en.onchange = () => { state.enabled = en.checked; };
-
-      const enLbl = document.createElement("label");
-      enLbl.style.display = "flex";
-      enLbl.style.alignItems = "center";
-      enLbl.style.gap = "8px";
-      enLbl.appendChild(en);
-      enLbl.appendChild(document.createTextNode("Enabled"));
-      enRow.appendChild(enLbl);
-      wrap.appendChild(enRow);
-
-      // Status (optional)
+      // 3. Status Text
       const status = document.createElement("div");
-      status.style.marginTop = "12px";
-      status.style.opacity = "0.8";
-      status.style.fontSize = "12px";
-      status.textContent = "Note snap is monophonic; large pitch jumps are clamped to reduce artifacts.";
+      status.style.cssText = "font-size:11px; color:#888; margin-top:15px;";
+      status.innerHTML = "Low speed = Robotic effect.<br>High speed = Natural correction.";
       wrap.appendChild(status);
 
       container.appendChild(wrap);
-
-      // Ensure UI reflects restored state
-      keySel.value = state.key;
-      scaleSel.value = state.scale;
-      retune.value = String(state.retune);
-      retuneVal.textContent = state.retune.toFixed(3) + "s";
-      hum.value = String(state.humanize);
-      humVal.textContent = Math.round(state.humanize * 100) + "%";
-      gateSlider.value = String(state.gateDb);
-      gateVal.textContent = state.gateDb + " dB";
-      en.checked = !!state.enabled;
     }
 
     return {
@@ -544,18 +332,15 @@
       mountUI,
       dispose(){
         stop();
-        try{ inputNode.disconnect(); }catch(e){}
-        try{ gate.disconnect(); }catch(e){}
-        try{ pitchShift.disconnect(); }catch(e){}
-        try{ analyser.dispose(); }catch(e){}
-        try{ inputNode.dispose(); }catch(e){}
-        try{ gate.dispose(); }catch(e){}
-        try{ pitchShift.dispose(); }catch(e){}
+        inputNode.dispose();
+        gate.dispose();
+        pitchShift.dispose();
+        analyser.dispose();
       }
     };
   }
 
-PLUGINS.push({
+  PLUGINS.push({
     id: "autotune",
     name: "AutoTune",
     create: createAutoTune
