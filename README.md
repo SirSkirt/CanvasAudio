@@ -60,7 +60,7 @@ You can still try the [Web Demo here](https://sirskirt.github.io/CanvasAudio), b
 
 ## 📦 Installation (Desktop)
 
-1.  Go to the **[Releases] (Not yet Released)(../../releases)** page.
+1.  Go to the **[Releases] (../../releases)** (Not yet Released) page.
 2.  Download the latest installer (`.exe` for Windows).
 3.  Run the installer.
 4.  **Auto-Updates:** The app will now automatically check for updates and prompt you to restart when a new version is available! (Again, once implemented)
