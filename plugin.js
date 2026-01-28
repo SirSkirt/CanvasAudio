@@ -287,6 +287,13 @@
       }catch(e){}
     }
 
+    function rescheduleTimer(){
+      if(!running) return;
+      if(timerId){ clearInterval(timerId); timerId = null; }
+      const ms = clamp(Math.round(state.retune * 1000), 8, 20);
+      timerId = setInterval(update, ms);
+    }
+
     function start(){
       if(running) return;
       running = true;
@@ -296,8 +303,13 @@
       currentShift = 0;
       lockedSince = performance.now();
       lastUpdateTs = 0;
-      // ~33 Hz update keeps CPU low and reduces zipper noise
-      timerId = setInterval(update, 30);
+      // Update rate: faster retune => faster updates (more T-Pain-like).
+      // Keep bounds to avoid excessive CPU/zipper noise.
+      const intervalMs = (function(){
+        const ms = Math.round(state.retune * 1000); // retune is seconds
+        return clamp(ms, 8, 20);
+      })();
+      timerId = setInterval(update, intervalMs);
     }
 
     function stop(){
@@ -331,6 +343,7 @@
       if(typeof s.key === "string") state.key = s.key;
       if(typeof s.scale === "string") state.scale = s.scale;
       if(typeof s.retune === "number") state.retune = clamp(s.retune, 0.005, 0.5);
+      rescheduleTimer();
       if(typeof s.humanize === "number") state.humanize = clamp(s.humanize, 0, 1);
       if(typeof s.gateDb === "number") state.gateDb = s.gateDb;
       if(typeof s.enabled === "boolean") state.enabled = s.enabled;
@@ -413,6 +426,7 @@
       retune.oninput = () => {
         state.retune = parseFloat(retune.value);
         retuneVal.textContent = state.retune.toFixed(3) + "s";
+        rescheduleTimer();
       };
 
       retuneLbl.appendChild(retune);
