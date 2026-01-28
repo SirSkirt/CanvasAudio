@@ -4,14 +4,34 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Canvas Audio</title>
-	<link rel="icon" type="image/png" href="favico.png">
+    <link rel="icon" type="image/png" href="favico.png">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
-    <script src="canvasaudio.js?v=0.3.2"></script>
-    <script src="plugin.js?v=0.3.2"></script>
+    <script src="canvasaudio.js?v=0.5.0"></script>
+    <script src="plugin.js?v=0.5.0"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  
+  <div id="title-bar" style="display:none;">
+    <div class="title-bar-left">
+      <img src="favico.png" class="title-icon">
+      <span class="title-text">Canvas Audio</span>
+      <div class="custom-menu-bar">
+        <div class="menu-item">File</div>
+        <div class="menu-item">Edit</div>
+        <div class="menu-item">View</div>
+        <div class="menu-item">Window</div>
+        <div class="menu-item">Help</div>
+      </div>
+    </div>
+    <div class="title-bar-controls">
+      <button id="btn-min" class="win-btn" title="Minimize"><i class="fas fa-minus"></i></button>
+      <button id="btn-max" class="win-btn" title="Maximize"><i class="far fa-square"></i></button>
+      <button id="btn-close" class="win-btn close-btn" title="Close"><i class="fas fa-times"></i></button>
+    </div>
+  </div>
+
   <div id="mainMenuOverlay" class="main-menu-overlay">
     <div class="main-menu-card">
       <div class="main-menu-title">Canvas Audio</div>
@@ -26,7 +46,6 @@
     <div id="audioStatusText" class="audio-status-text">Audio Not Ready</div>
     <button id="audioToggleBtn" class="audio-toggle-btn">Start</button>
   </div>
-
 
     <div class="toolbar">
 
@@ -58,13 +77,25 @@
                 </select>
             </div>
         </div>
+
+        <div class="edit-tools">
+            <button class="tool-btn" onclick="editTool('select')" title="Select Clip"><i class="fas fa-mouse-pointer"></i></button>
+            <button class="tool-btn" onclick="editTool('split')" title="Split at Playhead"><i class="fas fa-cut"></i></button>
+            <button class="tool-btn" onclick="editTool('mute')" title="Mute Clip"><i class="fas fa-volume-mute"></i></button>
+            <button class="tool-btn dest-btn" onclick="editTool('delete')" title="Delete Clip"><i class="fas fa-trash"></i></button>
+            
+            <button class="tool-btn" onclick="editTool('copy')" title="Copy"><i class="fas fa-copy"></i></button>
+            <button class="tool-btn" onclick="editTool('paste')" title="Paste at Playhead"><i class="fas fa-paste"></i></button>
+            <button class="tool-btn" onclick="editTool('trimStart')" title="Trim Start to Playhead"><i class="fas fa-angle-double-right"></i></button>
+            <button class="tool-btn" onclick="editTool('trimEnd')" title="Trim End to Playhead"><i class="fas fa-angle-double-left"></i></button>
+        </div>
+
 	</div>
 		<div class="version-label" id="version-label"></div>
         
     </div>
 
     <div class="workspace">
-        
         <div class="sidebar">
             <div class="sidebar-section">
                 <div class="sidebar-header">
@@ -138,5 +169,19 @@
             <div class="modal-body" id="inputMenuBody"></div>
         </div>
     </div>
+    
+    <div id="standalone-banner" style="display:none;">
+      <div class="banner-text">
+          <i class="fas fa-info-circle"></i> 
+          Download the standalone app for offline saves & better performance.
+      </div>
+      <div style="display:flex; align-items:center;">
+          <a href="https://github.com/SirSkirt/CanvasAudio/releases" target="_blank" class="banner-btn">
+              Download
+          </a>
+          <button class="banner-close" onclick="document.getElementById('standalone-banner').style.display='none'">&times;</button>
+      </div>
+    </div>
+
 </body>
 </html>
