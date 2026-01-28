@@ -4,17 +4,15 @@
 
   // AutoTune plugin (from autotune.js): real-time pitch detection + correction (chromatic snap)
   // NOTE: This is "live" pitch correction, not offline rendering.
+    // AutoTune plugin (simplified) inspired by common pitch-correction design:
+  // 1) Track fundamental pitch in (near) real time
+  // 2) Map to nearest note in selected Key/Scale with hysteresis (note tracking)
+  // 3) Apply smoothed pitch-shift toward target (Retune) with optional Humanize on sustained notes
+  //
+  // NOTE: Antares Auto-Tune is proprietary. This implementation is an approximation using
+  // Tone.PitchShift (which is known to be a simple shifter and can artifact on large shifts).
   function createAutoTune(trackCtx){
     const A4 = 440;
-
-    function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
-    function freqToMidi(freq){ return 69 + 12 * Math.log2(freq / A4); }
-    function getNoteName(midi){
-      const notes = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
-      const octave = Math.floor(midi / 12) - 1;
-      const noteIndex = (Math.round(midi) % 12 + 12) % 12;
-      return notes[noteIndex] + octave;
-    }
 
     const NOTE_NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
     const SCALE_INTERVALS = {
@@ -25,22 +23,35 @@
       "Pentatonic Minor": [0,3,5,7,10]
     };
 
+    function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+    function freqToMidi(freq){ return 69 + 12 * Math.log2(freq / A4); }
+    function midiToFreq(m){ return A4 * Math.pow(2, (m - 69) / 12); }
+    function pc(m){ return ((m % 12) + 12) % 12; }
+
     function keyNameToPc(name){
       const i = NOTE_NAMES.indexOf(name);
       return i >= 0 ? i : 0;
     }
 
-    function nearestAllowedMidi(midiFloat, keyPc, intervals){
-      // Find nearest midi integer whose pitch class is in (keyPc + intervals) mod 12
-      const allowed = new Set(intervals.map(iv => (keyPc + iv) % 12));
+    function getNoteName(midi){
+      const octave = Math.floor(midi / 12) - 1;
+      const noteIndex = pc(midi);
+      return NOTE_NAMES[noteIndex] + octave;
+    }
+
+    function buildAllowedPcSet(keyPc, intervals){
+      const allowed = new Set();
+      for(const iv of intervals) allowed.add((keyPc + iv) % 12);
+      return allowed;
+    }
+
+    function nearestAllowedMidi(midiFloat, allowedPc){
       const base = Math.round(midiFloat);
       let best = base;
       let bestDist = Infinity;
-
-      // Search outward up to an octave; cheap and good enough
       for(let delta=0; delta<=12; delta++){
         for(const cand of [base - delta, base + delta]){
-          if(allowed.has(((cand % 12) + 12) % 12)){
+          if(allowedPc.has(pc(cand))){
             const d = Math.abs(cand - midiFloat);
             if(d < bestDist){
               bestDist = d;
@@ -53,338 +64,484 @@
       return best;
     }
 
-    // Pitch Detection (Autocorrelation)
-    function autoCorrelate(buffer, sampleRate){
-      let size = buffer.length;
+    // --- Pitch detection: YIN (time-domain), good robustness for monophonic vocals ---
+    // Returns {freq, confidence} or {freq:-1, confidence:0}
+    function yinDetect(signal, sampleRate, fmin=60, fmax=800){
+      const N = signal.length;
+      // Remove DC
+      let mean = 0;
+      for(let i=0;i<N;i++) mean += signal[i];
+      mean /= N;
+      const x = new Float32Array(N);
+      for(let i=0;i<N;i++) x[i] = signal[i] - mean;
+
+      // RMS gate
       let rms = 0;
-      for(let i=0;i<size;i++){ const v = buffer[i]; rms += v*v; }
-      rms = Math.sqrt(rms / size);
+      for(let i=0;i<N;i++){ const v=x[i]; rms += v*v; }
+      rms = Math.sqrt(rms / N);
+      if(rms < 0.008) return {freq:-1, confidence:0}; // ~-42 dBFS
 
-      // Ignore low-level noise / hum
-      if(rms < 0.02) return -1;
+      const tauMin = Math.floor(sampleRate / fmax);
+      const tauMax = Math.floor(sampleRate / fmin);
+      const maxTau = Math.min(tauMax, Math.floor(N/2)-1);
+      if(maxTau <= tauMin+2) return {freq:-1, confidence:0};
 
-      let r1 = 0, r2 = size - 1, thres = 0.2;
-      for(let i=0;i<size/2;i++){ if(Math.abs(buffer[i]) < thres){ r1 = i; break; } }
-      for(let i=1;i<size/2;i++){ if(Math.abs(buffer[size-i]) < thres){ r2 = size - i; break; } }
-
-      buffer = buffer.slice(r1, r2);
-      size = buffer.length;
-
-      const c = new Array(size).fill(0);
-      for(let i=0;i<size;i++){
-        for(let j=0;j<size-i;j++){ c[i] += buffer[j] * buffer[j+i]; }
+      const d = new Float32Array(maxTau+1);
+      // Difference function d(tau)
+      for(let tau=1; tau<=maxTau; tau++){
+        let sum = 0;
+        for(let i=0; i< N - tau; i++){
+          const diff = x[i] - x[i+tau];
+          sum += diff*diff;
+        }
+        d[tau] = sum;
+      }
+      // Cumulative mean normalized difference function
+      const cmnd = new Float32Array(maxTau+1);
+      cmnd[0] = 1;
+      let runningSum = 0;
+      for(let tau=1; tau<=maxTau; tau++){
+        runningSum += d[tau];
+        cmnd[tau] = d[tau] * tau / (runningSum || 1);
       }
 
-      let d = 0;
-      while(d+1 < size && c[d] > c[d+1]) d++;
-
-      let maxval = -1, maxpos = -1;
-      for(let i=d;i<size;i++){
-        if(c[i] > maxval){ maxval = c[i]; maxpos = i; }
+      // Absolute threshold
+      const thresh = 0.15; // lower = stricter; 0.1-0.2 typical
+      let tauEstimate = -1;
+      for(let tau=tauMin; tau<=maxTau; tau++){
+        if(cmnd[tau] < thresh){
+          // find local minimum
+          while(tau+1 <= maxTau && cmnd[tau+1] < cmnd[tau]) tau++;
+          tauEstimate = tau;
+          break;
+        }
       }
-      let T0 = maxpos;
-      if(T0 <= 1 || T0+1 >= c.length) return -1;
+      if(tauEstimate === -1) return {freq:-1, confidence:0};
 
-      const x1 = c[T0-1], x2 = c[T0], x3 = c[T0+1];
-      const a = (x1 + x3 - 2*x2) / 2;
-      const b = (x3 - x1) / 2;
-      if(a) T0 = T0 - b / (2*a);
-
-      const freq = sampleRate / T0;
-      if(!isFinite(freq) || freq <= 0) return -1;
-      return freq;
+      // Parabolic interpolation for better precision
+      let betterTau = tauEstimate;
+      if(tauEstimate > 1 && tauEstimate < maxTau){
+        const s0 = cmnd[tauEstimate-1];
+        const s1 = cmnd[tauEstimate];
+        const s2 = cmnd[tauEstimate+1];
+        const denom = (2*s1 - s2 - s0);
+        if(Math.abs(denom) > 1e-9){
+          betterTau = tauEstimate + (s2 - s0) / (2*denom);
+        }
+      }
+      const freq = sampleRate / betterTau;
+      const confidence = 1 - cmnd[tauEstimate];
+      if(freq < fmin || freq > fmax) return {freq:-1, confidence:0};
+      return {freq, confidence};
     }
 
+    // --- Nodes ---
     const state = {
-      id: "autotune",
-      name: "AutoTune",
-      // Musical context
       key: "C",
       scale: "Chromatic",
-      // 0 = hard snap, 1 = very gentle / natural
+      // Retune speed in seconds: smaller = faster/harder (Antares style)
+      retune: 0.07,
+      // Humanize 0..1: more humanize = gentler on sustained notes
       humanize: 0.0,
-      // Retune/smoothing time in seconds (smaller = harder tuning)
-      retune: 0.10,
-      // Gate threshold in dB
       gateDb: -30,
       enabled: true
     };
 
-    // Composite nodes: input -> gate -> pitchShift -> output
     const inputNode = new Tone.Gain(1);
     const gate = new Tone.Gate(state.gateDb, 0.2);
+
+    // PitchShift artifacts are reduced if windowSize in 0.03..0.1 (Tone docs)
     const pitchShift = new Tone.PitchShift({
       pitch: 0,
-      windowSize: 0.1,
+      windowSize: 0.08,
       delayTime: 0,
       feedback: 0
     });
-    // Force fully-wet so there is no dry parallel path
     try{ pitchShift.wet.value = 1; }catch(e){}
 
-    const analyser = new Tone.Analyser("waveform", 1024);
+    // Tap AFTER gate so silence doesn't confuse detection
+    const analyser = new Tone.Analyser("waveform", 4096);
 
     inputNode.connect(gate);
     gate.connect(pitchShift);
-
-    // Raw audio tap for detection
-    inputNode.connect(analyser);
+    gate.connect(analyser);
 
     const outputNode = pitchShift;
 
+    // --- Tracking + smoothing ---
     let running = false;
-    let rafId = null;
+    let timerId = null;
 
-    const uiEls = { note:null, freq:null, corr:null, retuneVal:null, gateVal:null, humanizeVal:null };
+    let lastFreq = -1;
+    let lastMidi = null;
 
-    function setPitch(semitoneDiff){
-      const t = clamp(state.retune, 0.005, 0.5);
+    let targetMidi = null;        // tracked target note (with hysteresis)
+    let lockedSince = 0;          // ms timestamp when target locked
+    let currentShift = 0;         // semitones
+    let lastUpdateTs = 0;
+
+    function setShiftSmooth(targetShift, dtSec){
+      // Retune is "time to move most of the way" to target.
+      const baseT = clamp(state.retune, 0.005, 0.5);
+
+      // Humanize: only applies when holding the same target note for a bit
+      const now = performance.now();
+      const heldMs = targetMidi !== null ? (now - lockedSince) : 0;
+
+      // If sustained note (>250ms), slow down correction by up to ~6x when humanize=1
+      const human = clamp(state.humanize, 0, 1);
+      const sustainFactor = (heldMs > 250) ? (1 + human * 5) : 1;
+
+      const T = baseT * sustainFactor;
+      const alpha = 1 - Math.exp(-dtSec / (T || 0.001));
+
+      currentShift = currentShift + (targetShift - currentShift) * alpha;
+
+      // Apply (best-effort across Tone versions)
       try{
         if(pitchShift.pitch && typeof pitchShift.pitch.rampTo === "function"){
-          pitchShift.pitch.rampTo(semitoneDiff, t);
+          pitchShift.pitch.rampTo(currentShift, Math.min(0.05, T));
         }else if(typeof pitchShift.pitch === "number"){
-          pitchShift.pitch = semitoneDiff;
+          pitchShift.pitch = currentShift;
         }else if(pitchShift.pitch && typeof pitchShift.pitch === "object" && "value" in pitchShift.pitch){
-          pitchShift.pitch.value = semitoneDiff;
+          pitchShift.pitch.value = currentShift;
         }
       }catch(e){}
     }
 
-    function loop(){
+    function update(){
       if(!running) return;
+      const now = performance.now();
+      const dtSec = lastUpdateTs ? ((now - lastUpdateTs)/1000) : 0.03;
+      lastUpdateTs = now;
+
       try{
         const buf = analyser.getValue();
-        const detectedFreq = autoCorrelate(buf, Tone.context.sampleRate);
+        const {freq, confidence} = yinDetect(buf, Tone.context.sampleRate);
 
-        if(detectedFreq !== -1){
-          const midiNum = freqToMidi(detectedFreq);
+        if(freq === -1 || confidence < 0.5){
+          // No reliable pitch: decay correction toward 0 smoothly to avoid zipper noise
+          setShiftSmooth(0, dtSec);
+          lastFreq = -1;
+          lastMidi = null;
+          return;
+        }
 
-          const intervals = SCALE_INTERVALS[state.scale] || SCALE_INTERVALS["Chromatic"];
-          const keyPc = keyNameToPc(state.key);
-          const targetMidi = nearestAllowedMidi(midiNum, keyPc, intervals);
-
-          let semitoneDiff = targetMidi - midiNum;
-
-          // Humanize: soften correction + add tiny natural drift, and ignore micro-corrections
-          const hz = clamp(state.humanize, 0, 1);
-          const deadband = 0.10 + hz * 0.20; // semitones
-          if(Math.abs(semitoneDiff) < deadband) semitoneDiff = 0;
-
-          const strength = Math.max(0.15, 1 - hz); // keep at least a little correction
-          const jitter = (hz > 0) ? (hz * ((Math.random() * 0.10) - 0.05)) : 0; // +/- 0.05 st max
-          semitoneDiff = (semitoneDiff * strength) + jitter;
-
-          if(state.enabled){
-            setPitch(semitoneDiff);
+        // Median-ish smoothing: limit implausible jumps frame-to-frame
+        if(lastFreq > 0){
+          const ratio = freq / lastFreq;
+          if(ratio > 1.35 || ratio < 0.74){
+            // discard very large single-frame jumps (often octave errors)
+            return;
           }
+        }
+        lastFreq = freq;
 
-          if(uiEls.note) uiEls.note.textContent = getNoteName(nearestMidi);
-          if(uiEls.freq) uiEls.freq.textContent = Math.round(detectedFreq) + " Hz";
-          if(uiEls.corr) uiEls.corr.textContent = semitoneDiff.toFixed(2);
+        const midiFloat = freqToMidi(freq);
+        lastMidi = midiFloat;
+
+        const intervals = SCALE_INTERVALS[state.scale] || SCALE_INTERVALS["Chromatic"];
+        const allowedPc = buildAllowedPcSet(keyNameToPc(state.key), intervals);
+
+        // Hysteresis / note tracking:
+        // If we already have a target note, keep it unless we move well past the midpoint
+        // to a different allowed note. This prevents rapid toggling (clicks/pops).
+        if(targetMidi === null){
+          targetMidi = nearestAllowedMidi(midiFloat, allowedPc);
+          lockedSince = now;
+        }else{
+          const near = nearestAllowedMidi(midiFloat, allowedPc);
+
+          if(near !== targetMidi){
+            // Midpoint test in semitones
+            const mid = (near + targetMidi) / 2;
+            const distToTarget = Math.abs(midiFloat - targetMidi);
+            const distToNear = Math.abs(midiFloat - near);
+
+            // Switch only if clearly closer to the new note AND we've crossed midpoint
+            if(distToNear + 0.10 < distToTarget && ((targetMidi < near && midiFloat > mid) || (targetMidi > near && midiFloat < mid))){
+              targetMidi = near;
+              lockedSince = now;
+            }
+          }
+        }
+
+        let desiredShift = targetMidi - midiFloat;
+
+        // Micro-correction deadband (keeps natural vibrato)
+        const deadband = 0.08 + clamp(state.humanize, 0, 1) * 0.10; // semitones
+        if(Math.abs(desiredShift) < deadband) desiredShift = 0;
+
+        // Humanize also reduces overall correction strength a bit (more natural)
+        const strength = 1 - clamp(state.humanize, 0, 1) * 0.45; // keep at least ~55%
+        desiredShift *= strength;
+
+        // Clamp extreme shifts (Tone.PitchShift artifacts explode on big intervals)
+        desiredShift = clamp(desiredShift, -6, 6);
+
+        if(state.enabled){
+          setShiftSmooth(desiredShift, dtSec);
+        }else{
+          setShiftSmooth(0, dtSec);
         }
       }catch(e){}
-      rafId = requestAnimationFrame(loop);
     }
 
     function start(){
       if(running) return;
       running = true;
-      rafId = requestAnimationFrame(loop);
-    }
-    function stop(){
-      running = false;
-      if(rafId){ cancelAnimationFrame(rafId); rafId = null; }
+      lastFreq = -1;
+      lastMidi = null;
+      targetMidi = null;
+      currentShift = 0;
+      lockedSince = performance.now();
+      lastUpdateTs = 0;
+      // ~33 Hz update keeps CPU low and reduces zipper noise
+      timerId = setInterval(update, 30);
     }
 
-    // Start immediately; host still gates AudioContext with Start Audio button.
-    start();
+    function stop(){
+      running = false;
+      if(timerId){ clearInterval(timerId); timerId = null; }
+      // reset correction smoothly
+      try{
+        if(pitchShift.pitch && typeof pitchShift.pitch.rampTo === "function"){
+          pitchShift.pitch.rampTo(0, 0.05);
+        }else if(typeof pitchShift.pitch === "number"){
+          pitchShift.pitch = 0;
+        }else if(pitchShift.pitch && typeof pitchShift.pitch === "object" && "value" in pitchShift.pitch){
+          pitchShift.pitch.value = 0;
+        }
+      }catch(e){}
+    }
+
+    function getState(){
+      return {
+        key: state.key,
+        scale: state.scale,
+        retune: state.retune,
+        humanize: state.humanize,
+        gateDb: state.gateDb,
+        enabled: state.enabled
+      };
+    }
+
+    function setState(s){
+      if(!s) return;
+      if(typeof s.key === "string") state.key = s.key;
+      if(typeof s.scale === "string") state.scale = s.scale;
+      if(typeof s.retune === "number") state.retune = clamp(s.retune, 0.005, 0.5);
+      if(typeof s.humanize === "number") state.humanize = clamp(s.humanize, 0, 1);
+      if(typeof s.gateDb === "number") state.gateDb = s.gateDb;
+      if(typeof s.enabled === "boolean") state.enabled = s.enabled;
+      try{ gate.threshold.value = state.gateDb; }catch(e){}
+    }
 
     function mountUI(container){
       container.innerHTML = "";
 
-      const title = document.createElement("div");
-      title.className = "fxwin-title";
-      title.textContent = "AutoTune";
-      container.appendChild(title);
+      const wrap = document.createElement("div");
+      wrap.className = "plugin-ui";
 
-      const info = document.createElement("div");
-      info.className = "fxwin-row";
-      info.innerHTML = `
-        <label>Detected</label>
-        <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
-          <span>Note: <b id="fx_at_note">--</b></span>
-          <span>Freq: <b id="fx_at_freq">--</b></span>
-          <span>Corr: <b id="fx_at_corr">--</b> st</span>
-        </div>
-      `;
-      container.appendChild(info);
+      const row1 = document.createElement("div");
+      row1.style.display = "flex";
+      row1.style.gap = "10px";
+      row1.style.alignItems = "center";
+      row1.style.flexWrap = "wrap";
 
+      // Key selector
+      const keyLabel = document.createElement("label");
+      keyLabel.textContent = "Key";
+      keyLabel.style.display = "flex";
+      keyLabel.style.gap = "6px";
+      keyLabel.style.alignItems = "center";
 
-      const rowKeyScale = document.createElement("div");
-      rowKeyScale.className = "fxwin-row";
-      rowKeyScale.innerHTML = `
-        <label>Key / Scale</label>
-        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-          <select id="fx_at_key"></select>
-          <select id="fx_at_scale"></select>
-        </div>
-      `;
-      container.appendChild(rowKeyScale);
+      const keySel = document.createElement("select");
+      for(const n of NOTE_NAMES){
+        const opt = document.createElement("option");
+        opt.value = n;
+        opt.textContent = n;
+        keySel.appendChild(opt);
+      }
+      keySel.value = state.key;
+      keySel.onchange = () => { state.key = keySel.value; };
 
-      const rowHum = document.createElement("div");
-      rowHum.className = "fxwin-row";
-      rowHum.innerHTML = `
-        <label>Humanize</label>
-        <input id="fx_at_humanize" type="range" min="0" max="1" step="0.01" value="${state.humanize}">
-        <span id="fx_at_humanize_val">${Math.round(state.humanize*100)}%</span>
-      `;
-      container.appendChild(rowHum);
-      const rowRet = document.createElement("div");
-      rowRet.className = "fxwin-row";
-      rowRet.innerHTML = `
-        <label>Retune</label>
-        <input id="fx_at_retune" type="range" min="0.005" max="0.5" step="0.005" value="${state.retune}">
-        <span id="fx_at_retune_val">${state.retune.toFixed(3)}s</span>
-      `;
-      container.appendChild(rowRet);
+      keyLabel.appendChild(keySel);
+      row1.appendChild(keyLabel);
 
-      const rowGate = document.createElement("div");
-      rowGate.className = "fxwin-row";
-      rowGate.innerHTML = `
-        <label>Gate</label>
-        <input id="fx_at_gate" type="range" min="-60" max="-10" step="1" value="${state.gateDb}">
-        <span id="fx_at_gate_val">${state.gateDb} dB</span>
-      `;
-      container.appendChild(rowGate);
+      // Scale selector
+      const scaleLabel = document.createElement("label");
+      scaleLabel.textContent = "Scale";
+      scaleLabel.style.display = "flex";
+      scaleLabel.style.gap = "6px";
+      scaleLabel.style.alignItems = "center";
 
-      const rowEn = document.createElement("div");
-      rowEn.className = "fxwin-row";
-      rowEn.innerHTML = `
-        <label>Enable</label>
-        <input id="fx_at_en" type="checkbox" ${state.enabled ? "checked" : ""}>
-      `;
-      container.appendChild(rowEn);
+      const scaleSel = document.createElement("select");
+      for(const name of Object.keys(SCALE_INTERVALS)){
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = name;
+        scaleSel.appendChild(opt);
+      }
+      scaleSel.value = state.scale;
+      scaleSel.onchange = () => { state.scale = scaleSel.value; };
 
-      uiEls.note = container.querySelector("#fx_at_note");
-      uiEls.freq = container.querySelector("#fx_at_freq");
-      uiEls.corr = container.querySelector("#fx_at_corr");
-      uiEls.retuneVal = container.querySelector("#fx_at_retune_val");
-      uiEls.humanizeVal = container.querySelector("#fx_at_humanize_val");
+      scaleLabel.appendChild(scaleSel);
+      row1.appendChild(scaleLabel);
 
-      const keySel = container.querySelector("#fx_at_key");
-      const scaleSel = container.querySelector("#fx_at_scale");
-      const hum = container.querySelector("#fx_at_humanize");
+      wrap.appendChild(row1);
 
-      // Populate Key
-      NOTE_NAMES.forEach(n=>{
-        const o=document.createElement("option");
-        o.value=n; o.textContent=n;
-        if(n===state.key) o.selected=true;
-        keySel.appendChild(o);
-      });
+      // Retune
+      const retuneRow = document.createElement("div");
+      retuneRow.style.marginTop = "10px";
+      const retuneLbl = document.createElement("label");
+      retuneLbl.textContent = "Retune";
+      retuneLbl.style.display = "flex";
+      retuneLbl.style.alignItems = "center";
+      retuneLbl.style.gap = "8px";
 
-      // Populate Scale
-      Object.keys(SCALE_INTERVALS).forEach(s=>{
-        const o=document.createElement("option");
-        o.value=s; o.textContent=s;
-        if(s===state.scale) o.selected=true;
-        scaleSel.appendChild(o);
-      });
+      const retune = document.createElement("input");
+      retune.type = "range";
+      retune.min = "0.005";
+      retune.max = "0.25";
+      retune.step = "0.005";
+      retune.value = String(state.retune);
 
-      keySel.addEventListener("change", ()=>{
-        state.key = keySel.value || "C";
-      });
+      const retuneVal = document.createElement("span");
+      retuneVal.textContent = state.retune.toFixed(3) + "s";
 
-      scaleSel.addEventListener("change", ()=>{
-        state.scale = scaleSel.value || "Chromatic";
-      });
+      retune.oninput = () => {
+        state.retune = parseFloat(retune.value);
+        retuneVal.textContent = state.retune.toFixed(3) + "s";
+      };
 
-      hum.addEventListener("input", ()=>{
-        state.humanize = clamp(parseFloat(hum.value) || 0, 0, 1);
-        if(uiEls.humanizeVal) uiEls.humanizeVal.textContent = Math.round(state.humanize*100) + "%";
-      });
+      retuneLbl.appendChild(retune);
+      retuneLbl.appendChild(retuneVal);
+      retuneRow.appendChild(retuneLbl);
+      wrap.appendChild(retuneRow);
 
-      uiEls.gateVal = container.querySelector("#fx_at_gate_val");
+      // Humanize
+      const humRow = document.createElement("div");
+      humRow.style.marginTop = "10px";
+      const humLbl = document.createElement("label");
+      humLbl.textContent = "Humanize";
+      humLbl.style.display = "flex";
+      humLbl.style.alignItems = "center";
+      humLbl.style.gap = "8px";
 
-      const ret = container.querySelector("#fx_at_retune");
-      const gateEl = container.querySelector("#fx_at_gate");
-      const enEl = container.querySelector("#fx_at_en");
+      const hum = document.createElement("input");
+      hum.type = "range";
+      hum.min = "0";
+      hum.max = "1";
+      hum.step = "0.01";
+      hum.value = String(state.humanize);
 
-      ret.addEventListener("input", ()=>{
-        state.retune = clamp(parseFloat(ret.value) || 0.10, 0.005, 0.5);
-        if(uiEls.retuneVal) uiEls.retuneVal.textContent = state.retune.toFixed(3) + "s";
-      });
+      const humVal = document.createElement("span");
+      humVal.textContent = Math.round(state.humanize * 100) + "%";
 
-      gateEl.addEventListener("input", ()=>{
-        state.gateDb = Math.round(parseFloat(gateEl.value) || -30);
+      hum.oninput = () => {
+        state.humanize = parseFloat(hum.value);
+        humVal.textContent = Math.round(state.humanize * 100) + "%";
+      };
+
+      humLbl.appendChild(hum);
+      humLbl.appendChild(humVal);
+      humRow.appendChild(humLbl);
+      wrap.appendChild(humRow);
+
+      // Gate
+      const gateRow = document.createElement("div");
+      gateRow.style.marginTop = "10px";
+      const gateLbl = document.createElement("label");
+      gateLbl.textContent = "Gate";
+      gateLbl.style.display = "flex";
+      gateLbl.style.alignItems = "center";
+      gateLbl.style.gap = "8px";
+
+      const gateSlider = document.createElement("input");
+      gateSlider.type = "range";
+      gateSlider.min = "-60";
+      gateSlider.max = "-10";
+      gateSlider.step = "1";
+      gateSlider.value = String(state.gateDb);
+
+      const gateVal = document.createElement("span");
+      gateVal.textContent = state.gateDb + " dB";
+
+      gateSlider.oninput = () => {
+        state.gateDb = parseInt(gateSlider.value, 10);
+        gateVal.textContent = state.gateDb + " dB";
         try{ gate.threshold.value = state.gateDb; }catch(e){}
-        if(uiEls.gateVal) uiEls.gateVal.textContent = state.gateDb + " dB";
-      });
+      };
 
-      enEl.addEventListener("change", ()=>{
-        state.enabled = !!enEl.checked;
-        if(!state.enabled) setPitch(0);
-      });
-    }
+      gateLbl.appendChild(gateSlider);
+      gateLbl.appendChild(gateVal);
+      gateRow.appendChild(gateLbl);
+      wrap.appendChild(gateRow);
 
-    function getState(){ return { ...state }; }
-    function setState(next){
-      if(!next) return;
-      if(typeof next.key === "string") state.key = next.key;
-      if(typeof next.scale === "string") state.scale = next.scale;
-      if(typeof next.humanize === "number") state.humanize = clamp(next.humanize, 0, 1);
-      if(typeof next.retune === "number") state.retune = clamp(next.retune, 0.005, 0.5);
-      if(typeof next.gateDb === "number") state.gateDb = Math.round(clamp(next.gateDb, -60, -10));
-      if(typeof next.enabled === "boolean") state.enabled = next.enabled;
+      // Enabled
+      const enRow = document.createElement("div");
+      enRow.style.marginTop = "10px";
+      const en = document.createElement("input");
+      en.type = "checkbox";
+      en.checked = !!state.enabled;
+      en.onchange = () => { state.enabled = en.checked; };
 
-      // If UI is currently mounted, keep controls in sync
-      try{
-        const root = document;
-        const keySel = root.querySelector("#fx_at_key");
-        const scaleSel = root.querySelector("#fx_at_scale");
-        const hum = root.querySelector("#fx_at_humanize");
-        const humVal = root.querySelector("#fx_at_humanize_val");
-        const ret = root.querySelector("#fx_at_retune");
-        const retVal = root.querySelector("#fx_at_retune_val");
-        const gateEl = root.querySelector("#fx_at_gate");
-        const gateVal = root.querySelector("#fx_at_gate_val");
-        const enEl = root.querySelector("#fx_at_en");
+      const enLbl = document.createElement("label");
+      enLbl.style.display = "flex";
+      enLbl.style.alignItems = "center";
+      enLbl.style.gap = "8px";
+      enLbl.appendChild(en);
+      enLbl.appendChild(document.createTextNode("Enabled"));
+      enRow.appendChild(enLbl);
+      wrap.appendChild(enRow);
 
-        if(keySel) keySel.value = state.key;
-        if(scaleSel) scaleSel.value = state.scale;
-        if(hum) hum.value = String(state.humanize);
-        if(humVal) humVal.textContent = Math.round(state.humanize*100) + "%";
-        if(ret) ret.value = String(state.retune);
-        if(retVal) retVal.textContent = state.retune.toFixed(3) + "s";
-        if(gateEl) gateEl.value = String(state.gateDb);
-        if(gateVal) gateVal.textContent = state.gateDb + " dB";
-        if(enEl) enEl.checked = !!state.enabled;
-      }catch(e){}
+      // Status (optional)
+      const status = document.createElement("div");
+      status.style.marginTop = "12px";
+      status.style.opacity = "0.8";
+      status.style.fontSize = "12px";
+      status.textContent = "Note snap is monophonic; large pitch jumps are clamped to reduce artifacts.";
+      wrap.appendChild(status);
 
-      try{ gate.threshold.value = state.gateDb; }catch(e){}
-      if(!state.enabled) setPitch(0);
+      container.appendChild(wrap);
+
+      // Ensure UI reflects restored state
+      keySel.value = state.key;
+      scaleSel.value = state.scale;
+      retune.value = String(state.retune);
+      retuneVal.textContent = state.retune.toFixed(3) + "s";
+      hum.value = String(state.humanize);
+      humVal.textContent = Math.round(state.humanize * 100) + "%";
+      gateSlider.value = String(state.gateDb);
+      gateVal.textContent = state.gateDb + " dB";
+      en.checked = !!state.enabled;
     }
 
     return {
-      id: state.id,
-      name: state.name,
-      inputNode,
-      outputNode,
-      mountUI,
+      id: "autotune",
+      name: "AutoTune",
+      input: inputNode,
+      output: outputNode,
+      start,
+      stop,
       getState,
       setState,
-      setEnabled: (on)=>{ state.enabled = !!on; if(!state.enabled) setPitch(0); },
-      dispose: ()=>{
+      mountUI,
+      dispose(){
         stop();
+        try{ inputNode.disconnect(); }catch(e){}
+        try{ gate.disconnect(); }catch(e){}
+        try{ pitchShift.disconnect(); }catch(e){}
         try{ analyser.dispose(); }catch(e){}
-        try{ pitchShift.dispose(); }catch(e){}
-        try{ gate.dispose(); }catch(e){}
         try{ inputNode.dispose(); }catch(e){}
+        try{ gate.dispose(); }catch(e){}
+        try{ pitchShift.dispose(); }catch(e){}
       }
     };
   }
 
-  PLUGINS.push({
+PLUGINS.push({
     id: "autotune",
     name: "AutoTune",
     create: createAutoTune
