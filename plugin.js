@@ -14,6 +14,7 @@
       const octave = Math.floor(midi / 12) - 1;
       const noteIndex = (Math.round(midi) % 12 + 12) % 12;
       return notes[noteIndex] + octave;
+    }
 
     const NOTE_NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
     const SCALE_INTERVALS = {
@@ -50,7 +51,6 @@
         if(bestDist !== Infinity) break;
       }
       return best;
-    }
     }
 
     // Pitch Detection (Autocorrelation)
