@@ -1499,6 +1499,26 @@ function clearCurrentPattern() {
         state.patterns[state.selectedResId].grid = createEmptyGrid(state.timeSig);
         renderChannelRack();
     }
+    // --- ELECTRON WINDOW CONTROLS ---
+// Check if running in Electron before running this code
+if (typeof require !== 'undefined') {
+    const { ipcRenderer } = require('electron');
+
+    document.getElementById('btn-min').addEventListener('click', () => {
+        ipcRenderer.send('app/minimize');
+    });
+
+    document.getElementById('btn-max').addEventListener('click', () => {
+        ipcRenderer.send('app/maximize');
+    });
+
+    document.getElementById('btn-close').addEventListener('click', () => {
+        ipcRenderer.send('app/close');
+    });
+
+    // TODO: Add click handlers for your .menu-item elements here
+    // to open dropdowns or trigger save actions.
+}
 }
 
 window.addEventListener('load', init);
