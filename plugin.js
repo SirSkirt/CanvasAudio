@@ -2,177 +2,255 @@
 (function(){
   const PLUGINS = [];
 
-  function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+  // AutoTune plugin (from autotune.js): real-time pitch detection + correction (chromatic snap)
+  // NOTE: This is "live" pitch correction, not offline rendering.
+  function createAutoTune(trackCtx){
+    const A4 = 440;
 
-  // NOTE: This is a deliberately simplified "AutoTune" effect:
-  // - Uses Tone.PitchShift (constant semitone shift) with optional smoothing.
-  // - Key/scale controls are UI-only for now (future quantization can use these).
-  function createAutoTuneLite(trackCtx){
-    const node = new Tone.PitchShift({ pitch: 0, windowSize: 0.1, delayTime: 0, feedback: 0, wet: 1.0 });
+    function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+    function freqToMidi(freq){ return 69 + 12 * Math.log2(freq / A4); }
+    function getNoteName(midi){
+      const notes = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+      const octave = Math.floor(midi / 12) - 1;
+      const noteIndex = (Math.round(midi) % 12 + 12) % 12;
+      return notes[noteIndex] + octave;
+    }
+
+    // Pitch Detection (Autocorrelation)
+    function autoCorrelate(buffer, sampleRate){
+      let size = buffer.length;
+      let rms = 0;
+      for(let i=0;i<size;i++){ const v = buffer[i]; rms += v*v; }
+      rms = Math.sqrt(rms / size);
+
+      // Ignore low-level noise / hum
+      if(rms < 0.02) return -1;
+
+      let r1 = 0, r2 = size - 1, thres = 0.2;
+      for(let i=0;i<size/2;i++){ if(Math.abs(buffer[i]) < thres){ r1 = i; break; } }
+      for(let i=1;i<size/2;i++){ if(Math.abs(buffer[size-i]) < thres){ r2 = size - i; break; } }
+
+      buffer = buffer.slice(r1, r2);
+      size = buffer.length;
+
+      const c = new Array(size).fill(0);
+      for(let i=0;i<size;i++){
+        for(let j=0;j<size-i;j++){ c[i] += buffer[j] * buffer[j+i]; }
+      }
+
+      let d = 0;
+      while(d+1 < size && c[d] > c[d+1]) d++;
+
+      let maxval = -1, maxpos = -1;
+      for(let i=d;i<size;i++){
+        if(c[i] > maxval){ maxval = c[i]; maxpos = i; }
+      }
+      let T0 = maxpos;
+      if(T0 <= 1 || T0+1 >= c.length) return -1;
+
+      const x1 = c[T0-1], x2 = c[T0], x3 = c[T0+1];
+      const a = (x1 + x3 - 2*x2) / 2;
+      const b = (x3 - x1) / 2;
+      if(a) T0 = T0 - b / (2*a);
+
+      const freq = sampleRate / T0;
+      if(!isFinite(freq) || freq <= 0) return -1;
+      return freq;
+    }
+
     const state = {
       id: "autotune",
-      name: "AutoTune (Lite)",
-      key: "C",
-      scale: "major",
-      retune: 0.15,
-      flex: 0.0,
-      humanize: 0.0,
-      semitones: 0
+      name: "AutoTune",
+      // Retune/smoothing time in seconds (smaller = harder tuning)
+      retune: 0.10,
+      // Gate threshold in dB
+      gateDb: -30,
+      enabled: true
     };
 
-    // Tone.PitchShift.pitch is a plain number in many Tone.js builds.
-    // To support a "retune" feel without relying on AudioParam ramps,
-    // we implement a small JS ramp that updates node.pitch over time.
-    let _rampTimer = null;
-    let _rampStartT = 0;
-    let _rampFrom = 0;
-    let _rampTo = 0;
-    function stopRamp(){
-      if(_rampTimer){
-        clearInterval(_rampTimer);
-        _rampTimer = null;
-      }
-    }
-    function startRamp(from, to, seconds){
-      stopRamp();
-      _rampStartT = performance.now();
-      _rampFrom = from;
-      _rampTo = to;
-      const durMs = Math.max(10, (seconds || 0.15) * 1000);
-      _rampTimer = setInterval(()=>{
-        const t = (performance.now() - _rampStartT) / durMs;
-        if(t >= 1){
-          node.pitch = _rampTo;
-          stopRamp();
-          return;
+    // Composite nodes: input -> gate -> pitchShift -> output
+    const inputNode = new Tone.Gain(1);
+    const gate = new Tone.Gate(state.gateDb, 0.2);
+    const pitchShift = new Tone.PitchShift({
+      pitch: 0,
+      windowSize: 0.1,
+      delayTime: 0,
+      feedback: 0
+    });
+    // Force fully-wet so there is no dry parallel path
+    try{ pitchShift.wet.value = 1; }catch(e){}
+
+    const analyser = new Tone.Analyser("waveform", 1024);
+
+    inputNode.connect(gate);
+    gate.connect(pitchShift);
+
+    // Raw audio tap for detection
+    inputNode.connect(analyser);
+
+    const outputNode = pitchShift;
+
+    let running = false;
+    let rafId = null;
+
+    const uiEls = { note:null, freq:null, corr:null, retuneVal:null, gateVal:null };
+
+    function setPitch(semitoneDiff){
+      const t = clamp(state.retune, 0.005, 0.5);
+      try{
+        if(pitchShift.pitch && typeof pitchShift.pitch.rampTo === "function"){
+          pitchShift.pitch.rampTo(semitoneDiff, t);
+        }else if(typeof pitchShift.pitch === "number"){
+          pitchShift.pitch = semitoneDiff;
+        }else if(pitchShift.pitch && typeof pitchShift.pitch === "object" && "value" in pitchShift.pitch){
+          pitchShift.pitch.value = semitoneDiff;
         }
-        node.pitch = _rampFrom + (_rampTo - _rampFrom) * t;
-      }, 33); // ~30fps is enough for audible smoothing
+      }catch(e){}
     }
 
-    function setSemitones(semi){
-      state.semitones = semi;
+    function loop(){
+      if(!running) return;
+      try{
+        const buf = analyser.getValue();
+        const detectedFreq = autoCorrelate(buf, Tone.context.sampleRate);
 
-      // Always set the underlying effect parameter.
-      // Use a simple JS ramp to approximate retune smoothing.
-      const target = semi;
-      const cur = (typeof node.pitch === "number") ? node.pitch : (parseFloat(node.pitch) || 0);
-      const rt = clamp(state.retune, 0.01, 2.0);
-      if(rt <= 0.02){
-        stopRamp();
-        node.pitch = target;
-      }else{
-        startRamp(cur, target, rt);
-      }
+        if(detectedFreq !== -1){
+          const midiNum = freqToMidi(detectedFreq);
+          const nearestMidi = Math.round(midiNum);
+          const semitoneDiff = nearestMidi - midiNum;
+
+          if(state.enabled){
+            setPitch(semitoneDiff);
+          }
+
+          if(uiEls.note) uiEls.note.textContent = getNoteName(nearestMidi);
+          if(uiEls.freq) uiEls.freq.textContent = Math.round(detectedFreq) + " Hz";
+          if(uiEls.corr) uiEls.corr.textContent = semitoneDiff.toFixed(2);
+        }
+      }catch(e){}
+      rafId = requestAnimationFrame(loop);
     }
 
-    
-    function setState(next){
-      if(!next) return;
-      if(typeof next.key === "string") state.key = next.key;
-      if(typeof next.scale === "string") state.scale = next.scale;
-      if(typeof next.retune === "number") state.retune = clamp(next.retune, 0.01, 2.0);
-      if(typeof next.flex === "number") state.flex = clamp(next.flex, 0.0, 1.0);
-      if(typeof next.humanize === "number") state.humanize = clamp(next.humanize, 0.0, 1.0);
-      if(typeof next.semitones === "number") state.semitones = Math.round(clamp(next.semitones, -12, 12));
-      setSemitones(state.semitones);
+    function start(){
+      if(running) return;
+      running = true;
+      rafId = requestAnimationFrame(loop);
+    }
+    function stop(){
+      running = false;
+      if(rafId){ cancelAnimationFrame(rafId); rafId = null; }
     }
 
-function mountUI(container){
+    // Start immediately; host still gates AudioContext with Start Audio button.
+    start();
+
+    function mountUI(container){
       container.innerHTML = "";
 
       const title = document.createElement("div");
       title.className = "fxwin-title";
-      title.textContent = "AutoTune (Lite)";
+      title.textContent = "AutoTune";
       container.appendChild(title);
 
-      const row1 = document.createElement("div");
-      row1.className = "fxwin-row";
-      row1.innerHTML = `
-        <label>Key</label>
-        <select id="fx_at_key">
-          ${["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"].map(n=>`<option value="${n}">${n}</option>`).join("")}
-        </select>
-        <label style="margin-left:12px;">Scale</label>
-        <select id="fx_at_scale">
-          <option value="major">Major</option>
-          <option value="minor">Minor</option>
-        </select>
+      const info = document.createElement("div");
+      info.className = "fxwin-row";
+      info.innerHTML = `
+        <label>Detected</label>
+        <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+          <span>Note: <b id="fx_at_note">--</b></span>
+          <span>Freq: <b id="fx_at_freq">--</b></span>
+          <span>Corr: <b id="fx_at_corr">--</b> st</span>
+        </div>
       `;
-      container.appendChild(row1);
+      container.appendChild(info);
 
-      const row2 = document.createElement("div");
-      row2.className = "fxwin-row";
-      row2.innerHTML = `
-        <label>Semitones</label>
-        <input id="fx_at_semi" type="range" min="-12" max="12" step="1" value="0"/>
-        <span id="fx_at_semi_val" class="fxwin-value">0</span>
-      `;
-      container.appendChild(row2);
-
-      const row3 = document.createElement("div");
-      row3.className = "fxwin-row";
-      row3.innerHTML = `
+      const rowRet = document.createElement("div");
+      rowRet.className = "fxwin-row";
+      rowRet.innerHTML = `
         <label>Retune</label>
-        <input id="fx_at_retune" type="range" min="0.01" max="1.0" step="0.01" value="0.15"/>
-        <span id="fx_at_retune_val" class="fxwin-value">0.15s</span>
+        <input id="fx_at_retune" type="range" min="0.005" max="0.5" step="0.005" value="${state.retune}">
+        <span id="fx_at_retune_val">${state.retune.toFixed(3)}s</span>
       `;
-      container.appendChild(row3);
+      container.appendChild(rowRet);
 
-      const row4 = document.createElement("div");
-      row4.className = "fxwin-row fxwin-note";
-      row4.textContent = "Note: This is a simplified pitch shifter. Key/Scale controls are reserved for future note-quantized tuning.";
-      container.appendChild(row4);
+      const rowGate = document.createElement("div");
+      rowGate.className = "fxwin-row";
+      rowGate.innerHTML = `
+        <label>Gate</label>
+        <input id="fx_at_gate" type="range" min="-60" max="-10" step="1" value="${state.gateDb}">
+        <span id="fx_at_gate_val">${state.gateDb} dB</span>
+      `;
+      container.appendChild(rowGate);
 
-      const keyEl = container.querySelector("#fx_at_key");
-      const scaleEl = container.querySelector("#fx_at_scale");
-      const semiEl = container.querySelector("#fx_at_semi");
-      const semiVal = container.querySelector("#fx_at_semi_val");
-      const retEl = container.querySelector("#fx_at_retune");
-      const retVal = container.querySelector("#fx_at_retune_val");
+      const rowEn = document.createElement("div");
+      rowEn.className = "fxwin-row";
+      rowEn.innerHTML = `
+        <label>Enable</label>
+        <input id="fx_at_en" type="checkbox" ${state.enabled ? "checked" : ""}>
+      `;
+      container.appendChild(rowEn);
 
-      keyEl.value = state.key;
-      scaleEl.value = state.scale;
-      semiEl.value = String(state.semitones);
-      semiVal.textContent = String(state.semitones);
-      retEl.value = String(state.retune);
-      retVal.textContent = state.retune.toFixed(2) + "s";
+      uiEls.note = container.querySelector("#fx_at_note");
+      uiEls.freq = container.querySelector("#fx_at_freq");
+      uiEls.corr = container.querySelector("#fx_at_corr");
+      uiEls.retuneVal = container.querySelector("#fx_at_retune_val");
+      uiEls.gateVal = container.querySelector("#fx_at_gate_val");
 
-      keyEl.addEventListener("change", ()=>{ state.key = keyEl.value; });
-      scaleEl.addEventListener("change", ()=>{ state.scale = scaleEl.value; });
+      const ret = container.querySelector("#fx_at_retune");
+      const gateEl = container.querySelector("#fx_at_gate");
+      const enEl = container.querySelector("#fx_at_en");
 
-      semiEl.addEventListener("input", ()=>{
-        const v = parseInt(semiEl.value,10) || 0;
-        semiVal.textContent = String(v);
-        setSemitones(v);
+      ret.addEventListener("input", ()=>{
+        state.retune = clamp(parseFloat(ret.value) || 0.10, 0.005, 0.5);
+        if(uiEls.retuneVal) uiEls.retuneVal.textContent = state.retune.toFixed(3) + "s";
       });
 
-      retEl.addEventListener("input", ()=>{
-        const v = parseFloat(retEl.value) || 0.15;
-        state.retune = v;
-        retVal.textContent = v.toFixed(2) + "s";
+      gateEl.addEventListener("input", ()=>{
+        state.gateDb = Math.round(parseFloat(gateEl.value) || -30);
+        try{ gate.threshold.value = state.gateDb; }catch(e){}
+        if(uiEls.gateVal) uiEls.gateVal.textContent = state.gateDb + " dB";
       });
 
-      // Initialize
-      setSemitones(state.semitones);
+      enEl.addEventListener("change", ()=>{
+        state.enabled = !!enEl.checked;
+        if(!state.enabled) setPitch(0);
+      });
+    }
+
+    function getState(){ return { ...state }; }
+    function setState(next){
+      if(!next) return;
+      if(typeof next.retune === "number") state.retune = clamp(next.retune, 0.005, 0.5);
+      if(typeof next.gateDb === "number") state.gateDb = Math.round(clamp(next.gateDb, -60, -10));
+      if(typeof next.enabled === "boolean") state.enabled = next.enabled;
+
+      try{ gate.threshold.value = state.gateDb; }catch(e){}
+      if(!state.enabled) setPitch(0);
     }
 
     return {
       id: state.id,
       name: state.name,
-      node,
+      inputNode,
+      outputNode,
       mountUI,
-      getState: ()=>({ ...state }),
-      setState: (s)=>{ setState(s); },
-      setEnabled: (on)=>{ try{ node.wet.value = on ? 1.0 : 0.0; }catch(e){} },
-      dispose: ()=>{ stopRamp(); try{ node.dispose(); }catch(e){} }
+      getState,
+      setState,
+      setEnabled: (on)=>{ state.enabled = !!on; if(!state.enabled) setPitch(0); },
+      dispose: ()=>{
+        stop();
+        try{ analyser.dispose(); }catch(e){}
+        try{ pitchShift.dispose(); }catch(e){}
+        try{ gate.dispose(); }catch(e){}
+        try{ inputNode.dispose(); }catch(e){}
+      }
     };
   }
 
   PLUGINS.push({
     id: "autotune",
-    name: "AutoTune (Lite)",
-    create: createAutoTuneLite
+    name: "AutoTune",
+    create: createAutoTune
   });
 
   window.CA_PLUGINS = PLUGINS;

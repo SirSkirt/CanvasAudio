@@ -770,6 +770,7 @@ function applyMixerToAudio(trackIndex){
 function rebuildTrackFxChain(trackIndex){
     const t = ensureTrackAudio(trackIndex);
 
+    // Clear any existing chain from track input
     try{ t.input.disconnect(); }catch(e){}
     let cursor = t.input;
 
@@ -777,11 +778,24 @@ function rebuildTrackFxChain(trackIndex){
 
     for(let i=0;i<10;i++){
         const inst = slots[i];
-        if(inst && inst.node){
+        if(!inst) continue;
+
+        // Support plugins that expose a separate input/output (composite nodes)
+        const inNode = inst.inputNode || (inst.node && inst.node.inputNode) || null;
+        const outNode = inst.outputNode || (inst.node && inst.node.outputNode) || null;
+
+        if(inNode && outNode){
+            try{ cursor.connect(inNode); }catch(e){}
+            cursor = outNode;
+            continue;
+        }
+
+        if(inst.node){
             try{ cursor.connect(inst.node); }catch(e){}
             cursor = inst.node;
         }
     }
+
     try{ cursor.connect(t.pan); }catch(e){}
 }
 
@@ -1461,8 +1475,9 @@ function playAudioClip(id, time, trackIndex, offsetSeconds) {
 
                 // Destination: connect directly to raw destination to avoid Tone wrapper issues in iframes/PWA
                 const t = ensureTrackAudio((typeof trackIndex==='number' && trackIndex>=0) ? trackIndex : 0);
-            const inNode = (t.input && t.input.input) ? t.input.input : (t.input ? t.input : null);
-            if(inNode){ src.connect(inNode); } else { src.connect(ctx.destination); }
+                const inNode = (t.input && t.input.input) ? t.input.input : t.input;
+                // Always route through the track chain (FX -> Pan -> Vol -> Destination)
+                src.connect(inNode);
 
                 const off = (typeof offsetSeconds === 'number' && isFinite(offsetSeconds)) ? Math.max(0, offsetSeconds) : 0;
                 try{ src.start(when, off); }catch(e){ src.start(when); }
