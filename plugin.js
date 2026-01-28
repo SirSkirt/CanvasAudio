@@ -14,6 +14,43 @@
       const octave = Math.floor(midi / 12) - 1;
       const noteIndex = (Math.round(midi) % 12 + 12) % 12;
       return notes[noteIndex] + octave;
+
+    const NOTE_NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+    const SCALE_INTERVALS = {
+      "Chromatic": [0,1,2,3,4,5,6,7,8,9,10,11],
+      "Major":     [0,2,4,5,7,9,11],
+      "Minor":     [0,2,3,5,7,8,10],
+      "Pentatonic Major": [0,2,4,7,9],
+      "Pentatonic Minor": [0,3,5,7,10]
+    };
+
+    function keyNameToPc(name){
+      const i = NOTE_NAMES.indexOf(name);
+      return i >= 0 ? i : 0;
+    }
+
+    function nearestAllowedMidi(midiFloat, keyPc, intervals){
+      // Find nearest midi integer whose pitch class is in (keyPc + intervals) mod 12
+      const allowed = new Set(intervals.map(iv => (keyPc + iv) % 12));
+      const base = Math.round(midiFloat);
+      let best = base;
+      let bestDist = Infinity;
+
+      // Search outward up to an octave; cheap and good enough
+      for(let delta=0; delta<=12; delta++){
+        for(const cand of [base - delta, base + delta]){
+          if(allowed.has(((cand % 12) + 12) % 12)){
+            const d = Math.abs(cand - midiFloat);
+            if(d < bestDist){
+              bestDist = d;
+              best = cand;
+            }
+          }
+        }
+        if(bestDist !== Infinity) break;
+      }
+      return best;
+    }
     }
 
     // Pitch Detection (Autocorrelation)
@@ -61,6 +98,11 @@
     const state = {
       id: "autotune",
       name: "AutoTune",
+      // Musical context
+      key: "C",
+      scale: "Chromatic",
+      // 0 = hard snap, 1 = very gentle / natural
+      humanize: 0.0,
       // Retune/smoothing time in seconds (smaller = harder tuning)
       retune: 0.10,
       // Gate threshold in dB
@@ -93,7 +135,7 @@
     let running = false;
     let rafId = null;
 
-    const uiEls = { note:null, freq:null, corr:null, retuneVal:null, gateVal:null };
+    const uiEls = { note:null, freq:null, corr:null, retuneVal:null, gateVal:null, humanizeVal:null };
 
     function setPitch(semitoneDiff){
       const t = clamp(state.retune, 0.005, 0.5);
@@ -116,8 +158,21 @@
 
         if(detectedFreq !== -1){
           const midiNum = freqToMidi(detectedFreq);
-          const nearestMidi = Math.round(midiNum);
-          const semitoneDiff = nearestMidi - midiNum;
+
+          const intervals = SCALE_INTERVALS[state.scale] || SCALE_INTERVALS["Chromatic"];
+          const keyPc = keyNameToPc(state.key);
+          const targetMidi = nearestAllowedMidi(midiNum, keyPc, intervals);
+
+          let semitoneDiff = targetMidi - midiNum;
+
+          // Humanize: soften correction + add tiny natural drift, and ignore micro-corrections
+          const hz = clamp(state.humanize, 0, 1);
+          const deadband = 0.10 + hz * 0.20; // semitones
+          if(Math.abs(semitoneDiff) < deadband) semitoneDiff = 0;
+
+          const strength = Math.max(0.15, 1 - hz); // keep at least a little correction
+          const jitter = (hz > 0) ? (hz * ((Math.random() * 0.10) - 0.05)) : 0; // +/- 0.05 st max
+          semitoneDiff = (semitoneDiff * strength) + jitter;
 
           if(state.enabled){
             setPitch(semitoneDiff);
@@ -164,6 +219,26 @@
       `;
       container.appendChild(info);
 
+
+      const rowKeyScale = document.createElement("div");
+      rowKeyScale.className = "fxwin-row";
+      rowKeyScale.innerHTML = `
+        <label>Key / Scale</label>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <select id="fx_at_key"></select>
+          <select id="fx_at_scale"></select>
+        </div>
+      `;
+      container.appendChild(rowKeyScale);
+
+      const rowHum = document.createElement("div");
+      rowHum.className = "fxwin-row";
+      rowHum.innerHTML = `
+        <label>Humanize</label>
+        <input id="fx_at_humanize" type="range" min="0" max="1" step="0.01" value="${state.humanize}">
+        <span id="fx_at_humanize_val">${Math.round(state.humanize*100)}%</span>
+      `;
+      container.appendChild(rowHum);
       const rowRet = document.createElement("div");
       rowRet.className = "fxwin-row";
       rowRet.innerHTML = `
@@ -194,6 +269,41 @@
       uiEls.freq = container.querySelector("#fx_at_freq");
       uiEls.corr = container.querySelector("#fx_at_corr");
       uiEls.retuneVal = container.querySelector("#fx_at_retune_val");
+      uiEls.humanizeVal = container.querySelector("#fx_at_humanize_val");
+
+      const keySel = container.querySelector("#fx_at_key");
+      const scaleSel = container.querySelector("#fx_at_scale");
+      const hum = container.querySelector("#fx_at_humanize");
+
+      // Populate Key
+      NOTE_NAMES.forEach(n=>{
+        const o=document.createElement("option");
+        o.value=n; o.textContent=n;
+        if(n===state.key) o.selected=true;
+        keySel.appendChild(o);
+      });
+
+      // Populate Scale
+      Object.keys(SCALE_INTERVALS).forEach(s=>{
+        const o=document.createElement("option");
+        o.value=s; o.textContent=s;
+        if(s===state.scale) o.selected=true;
+        scaleSel.appendChild(o);
+      });
+
+      keySel.addEventListener("change", ()=>{
+        state.key = keySel.value || "C";
+      });
+
+      scaleSel.addEventListener("change", ()=>{
+        state.scale = scaleSel.value || "Chromatic";
+      });
+
+      hum.addEventListener("input", ()=>{
+        state.humanize = clamp(parseFloat(hum.value) || 0, 0, 1);
+        if(uiEls.humanizeVal) uiEls.humanizeVal.textContent = Math.round(state.humanize*100) + "%";
+      });
+
       uiEls.gateVal = container.querySelector("#fx_at_gate_val");
 
       const ret = container.querySelector("#fx_at_retune");
@@ -220,9 +330,36 @@
     function getState(){ return { ...state }; }
     function setState(next){
       if(!next) return;
+      if(typeof next.key === "string") state.key = next.key;
+      if(typeof next.scale === "string") state.scale = next.scale;
+      if(typeof next.humanize === "number") state.humanize = clamp(next.humanize, 0, 1);
       if(typeof next.retune === "number") state.retune = clamp(next.retune, 0.005, 0.5);
       if(typeof next.gateDb === "number") state.gateDb = Math.round(clamp(next.gateDb, -60, -10));
       if(typeof next.enabled === "boolean") state.enabled = next.enabled;
+
+      // If UI is currently mounted, keep controls in sync
+      try{
+        const root = document;
+        const keySel = root.querySelector("#fx_at_key");
+        const scaleSel = root.querySelector("#fx_at_scale");
+        const hum = root.querySelector("#fx_at_humanize");
+        const humVal = root.querySelector("#fx_at_humanize_val");
+        const ret = root.querySelector("#fx_at_retune");
+        const retVal = root.querySelector("#fx_at_retune_val");
+        const gateEl = root.querySelector("#fx_at_gate");
+        const gateVal = root.querySelector("#fx_at_gate_val");
+        const enEl = root.querySelector("#fx_at_en");
+
+        if(keySel) keySel.value = state.key;
+        if(scaleSel) scaleSel.value = state.scale;
+        if(hum) hum.value = String(state.humanize);
+        if(humVal) humVal.textContent = Math.round(state.humanize*100) + "%";
+        if(ret) ret.value = String(state.retune);
+        if(retVal) retVal.textContent = state.retune.toFixed(3) + "s";
+        if(gateEl) gateEl.value = String(state.gateDb);
+        if(gateVal) gateVal.textContent = state.gateDb + " dB";
+        if(enEl) enEl.checked = !!state.enabled;
+      }catch(e){}
 
       try{ gate.threshold.value = state.gateDb; }catch(e){}
       if(!state.enabled) setPitch(0);
