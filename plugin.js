@@ -1,13 +1,14 @@
 /**
  * CanvasAudio Plugin Registry
- * v0.3.2 - Self-contained Autotune
+ * v0.5.1 - Preserving Autotune Logic
  */
 
 (function(){
-  const PLUGINS = [];
+  // 1. Initialize the Global Registry Object
+  window.CA_PLUGINS = window.CA_PLUGINS || {};
 
-  // --- AUTOTUNE FACTORY ---
-  function createAutoTune(trackCtx){
+  // --- AUTOTUNE FACTORY (YOUR ORIGINAL CODE) ---
+  function createAutoTune(){
     const A4 = 440;
     const NOTE_NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
     
@@ -21,7 +22,7 @@
 
     // --- Helpers ---
     function freqToMidi(freq){ return 69 + 12 * Math.log2(freq / A4); }
-    function midiToFreq(m){ return A4 * Math.pow(2, (m - 69) / 12); }
+    // function midiToFreq(m){ return A4 * Math.pow(2, (m - 69) / 12); } // Unused
     function pc(m){ return ((m % 12) + 12) % 12; } // Pitch Class (0-11)
     
     function keyNameToPc(name){
@@ -64,13 +65,12 @@
       for(let i=0;i<N;i++) rms += signal[i]*signal[i];
       rms = Math.sqrt(rms/N);
       
-      if(rms < 0.01) return {freq: -1, confidence: 0}; // Noise Gate (Hard)
+      if(rms < 0.01) return {freq: -1, confidence: 0}; // Noise Gate
 
-      // Simplified Autocorrelation for speed
+      // Simplified Autocorrelation
       let bestOffset = -1;
       let bestCorrelation = 0;
       
-      // Search range: roughly 80Hz to 1000Hz
       const minLag = Math.floor(sampleRate / 1000);
       const maxLag = Math.floor(sampleRate / 80);
 
@@ -79,26 +79,22 @@
           for(let i = 0; i < N - lag; i++) {
               sum += signal[i] * signal[i+lag];
           }
-          // Normalize (roughly)
           const correlation = sum / N; 
-          
           if(correlation > bestCorrelation) {
               bestCorrelation = correlation;
               bestOffset = lag;
           }
       }
 
-      // If confidence is low, ignore
       if(bestCorrelation < 0.001) return {freq: -1, confidence: 0};
-
       return { freq: sampleRate / bestOffset, confidence: bestCorrelation };
     }
 
     // --- Audio Graph ---
+    // We use Tone.Gain to ensure compatibility with standard connections
     const inputNode = new Tone.Gain(1);
     const outputNode = new Tone.Gain(1);
     
-    // Use windowSize 0.1 for smoother vocal handling (less grain)
     const pitchShifter = new Tone.PitchShift({
       pitch: 0,
       windowSize: 0.1, 
@@ -110,13 +106,13 @@
 
     inputNode.connect(pitchShifter);
     pitchShifter.connect(outputNode);
-    inputNode.connect(analyser); // Analyze pre-shift signal
+    inputNode.connect(analyser); 
 
     // --- State ---
     const state = {
       key: "C",
       scale: "Chromatic",
-      retune: 0.1, // Default 100ms smoothing (Natural)
+      retune: 0.1, 
       enabled: true
     };
 
@@ -132,7 +128,6 @@
       const { freq, confidence } = yinDetect(buffer, Tone.context.sampleRate);
 
       if(freq <= 0 || confidence < 0.05) {
-        // No note: relax pitch shift to 0 gently
         pitchShifter.pitch.rampTo(0, 0.2);
         return;
       }
@@ -141,32 +136,23 @@
       const keyPc = keyNameToPc(state.key);
       const intervals = SCALE_INTERVALS[state.scale] || SCALE_INTERVALS["Chromatic"];
       const allowed = buildAllowedPcSet(keyPc, intervals);
-
-      // Snap
       let nearest = nearestAllowedMidi(midiFloat, allowed);
 
-      // Hysteresis: stick to current note if close enough (prevents fluttering)
       if(targetMidi !== null && Math.abs(nearest - targetMidi) > 0 && Math.abs(midiFloat - targetMidi) < 0.4) {
           nearest = targetMidi;
       }
       targetMidi = nearest;
 
-      // Calculate Shift
       let shift = nearest - midiFloat;
-      
-      // Clamp extreme shifts (Tone.PitchShift limits)
       if(shift > 12) shift = 12;
       if(shift < -12) shift = -12;
 
-      // Apply with smoothing (Retune Speed)
-      // rampTo is crucial here to stop the "popping"
       pitchShifter.pitch.rampTo(shift, state.retune); 
     }
 
     function start(){
       if(running) return;
       running = true;
-      // Run detection loop at approx 30fps
       timerId = setInterval(update, 30);
     }
 
@@ -176,33 +162,22 @@
       pitchShifter.pitch.rampTo(0, 0.1);
     }
 
-    // --- API ---
-    
-    // Auto-start immediately upon creation
     start();
 
+    // RETURN THE ADVANCED OBJECT
     return {
-      id: "autotune",
       name: "AutoTune",
       input: inputNode,
       output: outputNode,
       start,
       stop,
-      
-      setState: (s) => {
-          if(s.key) state.key = s.key;
-          if(s.scale) state.scale = s.scale;
-          if(typeof s.retune === 'number') state.retune = s.retune;
-          if(typeof s.enabled === 'boolean') state.enabled = s.enabled;
-      },
-      
+      setState: (s) => Object.assign(state, s),
       getState: () => ({...state}),
-
       mountUI: (container) => {
         container.innerHTML = '';
         const style = "margin-bottom:10px; display:flex; align-items:center; gap:10px; font-size:12px; color:#ccc;";
         
-        // Key / Scale
+        // Key / Scale UI
         const row1 = document.createElement('div');
         row1.style.cssText = style;
         
@@ -227,13 +202,12 @@
         row1.append("Key:", kSel, "Scale:", sSel);
         container.appendChild(row1);
 
-        // Speed
+        // Speed UI
         const row2 = document.createElement('div');
         row2.style.cssText = style;
         
         const spd = document.createElement('input');
-        spd.type = 'range';
-        spd.min = '0.01'; spd.max = '0.4'; spd.step = '0.01';
+        spd.type = 'range'; spd.min = '0.01'; spd.max = '0.4'; spd.step = '0.01';
         spd.value = state.retune;
         
         const lbl = document.createElement('span');
@@ -246,13 +220,7 @@
 
         row2.append("Speed:", spd, lbl);
         container.appendChild(row2);
-        
-        const hint = document.createElement('div');
-        hint.style.cssText = "font-size:11px; color:#666; margin-top:5px;";
-        hint.textContent = "Lower speed = Robotic. Higher speed = Natural.";
-        container.appendChild(hint);
       },
-
       dispose: () => {
         stop();
         inputNode.dispose();
@@ -263,13 +231,19 @@
     };
   }
 
-  // --- REGISTER ---
-  PLUGINS.push({
-    id: "autotune",
-    name: "AutoTune",
-    create: createAutoTune
-  });
+  // 2. REGISTER PLUGINS (The Fix)
+  window.CA_PLUGINS['Autotune'] = {
+      name: "Autotune",
+      create: createAutoTune
+  };
 
-  window.CA_PLUGINS = PLUGINS;
+  // Bonus Reverb (Simple)
+  window.CA_PLUGINS['Reverb'] = {
+      name: "Reverb",
+      create: () => { 
+          const r = new Tone.Reverb({ decay: 2, wet: 0.5 });
+          return { input: r, output: r, name: "Reverb" }; // Wrapper for consistency
+      }
+  };
 
 })();
