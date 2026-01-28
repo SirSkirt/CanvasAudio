@@ -1,6 +1,6 @@
 /**
  * CanvasAudio Main Logic
- * v0.5.0 - Edit Tools Update
+ * v0.5.0 - Clean Web Mode
  */
 
 const APP_STAGE = "Alpha";
@@ -40,9 +40,8 @@ let state = {
     selectedResId: 'pat1',
     playheadStep: 0,
 
-    // NEW: Selection & Clipboard
-    selectedClip: null, // { trackIndex, clipIndex }
-    clipboard: null, // Clip data object
+    selectedClip: null, 
+    clipboard: null, 
     
     mixer: {
         trackNames: Array.from({length:8}, (_,i)=>`Track ${i+1}`),
@@ -64,7 +63,7 @@ const hatSynth = new Tone.MetalSynth({ envelope: { attack: 0.001, decay: 0.1, re
 const clapSynth = new Tone.NoiseSynth({ noise: { type: 'white' }, envelope: { attack: 0.005, decay: 0.1, sustain: 0 } }).toDestination(); clapSynth.volume.value = -10;
 let activeSources = [];
 
-// --- TOOL FUNCTIONS (NEW) ---
+// --- TOOL FUNCTIONS ---
 function editTool(action) {
     if (action === 'paste') {
         pasteClipAtPlayhead();
@@ -82,9 +81,7 @@ function editTool(action) {
     const clip = track[clipIndex];
 
     switch (action) {
-        case 'select':
-            // Just default mode
-            break;
+        case 'select': break;
         case 'delete':
             track.splice(clipIndex, 1);
             state.selectedClip = null;
@@ -115,26 +112,21 @@ function splitClipAtPlayhead(trackIndex, clipIndex) {
     const clip = track[clipIndex];
     const playheadBar = state.currentStep / 16;
 
-    // Check if playhead is inside clip
     if (playheadBar > clip.startBar && playheadBar < (clip.startBar + clip.lengthBars)) {
         const firstLen = playheadBar - clip.startBar;
         const secondLen = clip.lengthBars - firstLen;
-        
-        // Shorten first clip
         clip.lengthBars = firstLen;
 
-        // Create new clip
         const newClip = JSON.parse(JSON.stringify(clip));
         newClip.startBar = playheadBar;
         newClip.lengthBars = secondLen;
         
-        // For audio, we should ideally adjust offset, but simplistic split for now:
         if(newClip.type === 'audio') {
             newClip.offset = (newClip.offset || 0) + (firstLen * (60/state.bpm * state.timeSig));
         }
 
         track.push(newClip);
-        state.selectedClip = null; // Deselect to avoid confusion
+        state.selectedClip = null; 
         renderPlaylist();
     } else {
         alert("Playhead must be inside the clip to split.");
@@ -167,7 +159,7 @@ function trimClipStart(trackIndex, clipIndex) {
 function pasteClipAtPlayhead() {
     if (!state.clipboard) return;
     const playheadBar = state.currentStep / 16;
-    const trackIndex = state.selectedClip ? state.selectedClip.trackIndex : 0; // Paste to selected track or first
+    const trackIndex = state.selectedClip ? state.selectedClip.trackIndex : 0; 
     
     const newClip = JSON.parse(JSON.stringify(state.clipboard));
     newClip.startBar = playheadBar;
@@ -177,15 +169,24 @@ function pasteClipAtPlayhead() {
 }
 
 
-// --- ENVIRONMENT ---
+// --- ENVIRONMENT DETECTION (UPDATED) ---
 function checkEnvironment() {
-    const isElectron = typeof process !== 'undefined' && process.versions && process.versions.electron;
+    // Robust check for Electron environment
+    const isElectron = typeof process !== 'undefined' && 
+                       process.versions && 
+                       process.versions.electron;
+                       
     const titleBar = document.getElementById('title-bar');
     const banner = document.getElementById('standalone-banner');
 
     if (isElectron) {
+        console.log("Running in Standalone Mode");
+        // Show Fiddle features
         if(titleBar) titleBar.style.display = 'flex';
+        // Hide Banner
         if(banner) banner.style.display = 'none';
+        
+        // Wire up window controls
         if (typeof require !== 'undefined') {
             const { ipcRenderer } = require('electron');
             document.getElementById('btn-min')?.addEventListener('click', () => ipcRenderer.send('app/minimize'));
@@ -193,15 +194,22 @@ function checkEnvironment() {
             document.getElementById('btn-close')?.addEventListener('click', () => ipcRenderer.send('app/close'));
         }
     } else {
+        console.log("Running in Browser Mode");
+        // Hide Fiddle features (Title Bar)
         if(titleBar) titleBar.style.display = 'none';
-        if(banner) banner.style.display = 'flex';
+        
+        // Hide Banner (Clean Web Mode)
+        // We hide this so mobile/web users aren't nagged to download an exe they can't use.
+        if(banner) banner.style.display = 'none';
     }
 }
 
 function init() {
     const vEl = document.getElementById('version-label');
     if (vEl) vEl.textContent = `${APP_STAGE} Version ${APP_VERSION}`;
-    checkEnvironment();
+    
+    checkEnvironment(); // Run detection
+    
     if(!loadProjectFromStorage()) {}
     generateRuler();
     renderResources();
@@ -438,7 +446,6 @@ function renderPlaylist() {
         l.className = 'track-lane';
         l.onclick = (e) => {
             if(e.target !== l) return;
-            // Deselect if clicking empty space
             state.selectedClip = null;
             renderPlaylist();
             const bar = Math.floor(e.offsetX / 60);
@@ -447,7 +454,6 @@ function renderPlaylist() {
         clips.forEach((clip, clipIndex) => {
             const el = document.createElement('div');
             el.className = `clip ${clip.type === 'pattern' ? 'clip-pattern' : 'clip-audio'}`;
-            // Highlight if selected
             if (state.selectedClip && state.selectedClip.trackIndex === idx && state.selectedClip.clipIndex === clipIndex) {
                 el.classList.add('selected-clip');
             }
@@ -456,9 +462,8 @@ function renderPlaylist() {
             el.style.width = (clip.lengthBars * 60) + 'px';
             el.innerText = clip.type === 'pattern' ? state.patterns[clip.id]?.name : state.audioClips[clip.id]?.name;
             
-            // CLICK TO SELECT
             el.onclick = (e) => {
-                e.stopPropagation(); // Prevent track lane click
+                e.stopPropagation(); 
                 state.selectedClip = { trackIndex: idx, clipIndex: clipIndex };
                 renderPlaylist();
             };
@@ -521,18 +526,15 @@ Tone.Transport.scheduleRepeat((time) => {
         const grid = state.patterns[state.selectedResId].grid;
         instruments.forEach((inst, idx) => { if(grid[idx][patStep]) playInst(idx, time); });
     } else if (state.mode === 'SONG') {
-        // SONG MODE PLAYBACK
         const currentBar = Math.floor(step / 16);
         const stepInBar = step % 16;
         state.playlist.forEach((track, trackIndex) => {
             track.forEach(clip => {
-                if (clip.muted) return; // SKIP MUTED
+                if (clip.muted) return; 
                 if(currentBar >= clip.startBar && currentBar < clip.startBar + clip.lengthBars) {
                     if(clip.type === 'pattern' && state.patterns[clip.id]) {
                         const grid = state.patterns[clip.id].grid;
                         const pStep = stepInBar % grid[0].length;
-                        // For simplicity in this version, triggers every beat
-                        // Real implementation needs full step offset calc
                         playPatternStep(grid, pStep, time);
                     }
                     if(clip.type === 'audio' && currentBar === clip.startBar && stepInBar === 0) {
