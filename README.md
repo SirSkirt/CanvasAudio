@@ -66,19 +66,7 @@ You can still try the [Web Demo here](https://sirskirt.github.io/CanvasAudio), b
 4.  **Auto-Updates:** The app will now automatically check for updates and prompt you to restart when a new version is available! (Again, once implemented)
 
 ---
-
-## 🛠️ Development
-
-If you want to hack on the code:
-
-1.  Clone the repo.
-2.  Install dependencies:
-    ```bash
-    npm install
-    ```
-3.  Run the dev app:
-    ```bash
-    npm start
-    ```
+**Why Make a DAW in Javascript?**
+-Because we are curious how far we can push a webapp and make easily portable cross platform apps/games
 
 **Built with ❤️ by QTech Studios**
