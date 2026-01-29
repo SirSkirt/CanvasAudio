@@ -463,6 +463,20 @@ function generateRuler() {
     }
 }
 
+
+function secondsPerBar() {
+    // Assumes quarter-note beat and timeSig beats per bar (e.g., 4/4 => 4 beats)
+    return (60 / (state.bpm || 120)) * (state.timeSig || 4);
+}
+
+function calcAudioLengthBars(audioClipId) {
+    const cd = state.audioClips ? state.audioClips[audioClipId] : null;
+    if(!cd || !cd.duration || !isFinite(cd.duration)) return 2;
+    const spb = secondsPerBar();
+    if(!spb || !isFinite(spb) || spb <= 0) return 2;
+    return Math.max(1, Math.ceil(cd.duration / spb));
+}
+
 function renderPlaylist() {
     const c = document.getElementById('playlist-tracks');
     if(!c) return;
@@ -517,7 +531,8 @@ function addClipToTrack(trackIdx, startBar) {
         type: state.selectedResType,
         id: state.selectedResId,
         startBar: startBar,
-        lengthBars: state.selectedResType === 'pattern' ? 1 : 2
+        lengthBars: state.selectedResType === 'pattern' ? 1 : ((state.selectedResType === 'audio') ? calcAudioLengthBars(state.selectedResId) : 2),
+        autoLength: (state.selectedResType === 'audio')
     });
     renderPlaylist();
 }
