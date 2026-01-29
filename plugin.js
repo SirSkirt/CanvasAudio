@@ -1,13 +1,13 @@
 /**
  * CanvasAudio Plugin Registry
- * v0.5.1 - Preserving Autotune Logic
+ * v0.5.2 - Fixed Autotune Crash
  */
 
 (function(){
   // 1. Initialize the Global Registry Object
   window.CA_PLUGINS = window.CA_PLUGINS || {};
 
-  // --- AUTOTUNE FACTORY (YOUR ORIGINAL CODE) ---
+  // --- AUTOTUNE FACTORY ---
   function createAutoTune(){
     const A4 = 440;
     const NOTE_NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
@@ -22,8 +22,7 @@
 
     // --- Helpers ---
     function freqToMidi(freq){ return 69 + 12 * Math.log2(freq / A4); }
-    // function midiToFreq(m){ return A4 * Math.pow(2, (m - 69) / 12); } // Unused
-    function pc(m){ return ((m % 12) + 12) % 12; } // Pitch Class (0-11)
+    function pc(m){ return ((m % 12) + 12) % 12; } 
     
     function keyNameToPc(name){
       const i = NOTE_NAMES.indexOf(name);
@@ -36,13 +35,11 @@
       return allowed;
     }
 
-    // Find nearest allowed note, preferring the current octave
     function nearestAllowedMidi(midiFloat, allowedPc){
       const base = Math.round(midiFloat);
       let best = base;
       let bestDist = Infinity;
       
-      // Check neighbors
       for(let delta=0; delta<=12; delta++){
         for(const cand of [base - delta, base + delta]){
           if(allowedPc.has(pc(cand))){
@@ -58,16 +55,15 @@
       return best;
     }
 
-    // --- YIN Pitch Detection (Robust) ---
+    // --- YIN Pitch Detection ---
     function yinDetect(signal, sampleRate){
       const N = signal.length;
       let rms = 0;
       for(let i=0;i<N;i++) rms += signal[i]*signal[i];
       rms = Math.sqrt(rms/N);
       
-      if(rms < 0.01) return {freq: -1, confidence: 0}; // Noise Gate
+      if(rms < 0.01) return {freq: -1, confidence: 0}; 
 
-      // Simplified Autocorrelation
       let bestOffset = -1;
       let bestCorrelation = 0;
       
@@ -91,7 +87,6 @@
     }
 
     // --- Audio Graph ---
-    // We use Tone.Gain to ensure compatibility with standard connections
     const inputNode = new Tone.Gain(1);
     const outputNode = new Tone.Gain(1);
     
@@ -128,7 +123,8 @@
       const { freq, confidence } = yinDetect(buffer, Tone.context.sampleRate);
 
       if(freq <= 0 || confidence < 0.05) {
-        pitchShifter.pitch.rampTo(0, 0.2);
+        // Safe Reset
+        safelyRampPitch(0, 0.2);
         return;
       }
 
@@ -147,7 +143,26 @@
       if(shift > 12) shift = 12;
       if(shift < -12) shift = -12;
 
-      pitchShifter.pitch.rampTo(shift, state.retune); 
+      // Safe Update
+      safelyRampPitch(shift, state.retune);
+    }
+
+    // --- SAFE PITCH FUNCTION (The Fix) ---
+    function safelyRampPitch(value, time) {
+        if(!pitchShifter || typeof pitchShifter.pitch === 'undefined') return;
+
+        // Check if rampTo exists (Signal)
+        if (pitchShifter.pitch.rampTo && typeof pitchShifter.pitch.rampTo === 'function') {
+            pitchShifter.pitch.rampTo(value, time);
+        } 
+        // Fallback: Check if .value exists (Signal-like but missing ramp?)
+        else if (typeof pitchShifter.pitch.value !== 'undefined') {
+            pitchShifter.pitch.value = value;
+        } 
+        // Fallback: Primitive (Number)
+        else {
+            pitchShifter.pitch = value;
+        }
     }
 
     function start(){
@@ -159,7 +174,7 @@
     function stop(){
       running = false;
       if(timerId) clearInterval(timerId);
-      pitchShifter.pitch.rampTo(0, 0.1);
+      safelyRampPitch(0, 0.1);
     }
 
     start();
@@ -231,18 +246,18 @@
     };
   }
 
-  // 2. REGISTER PLUGINS (The Fix)
+  // 2. REGISTER PLUGINS
   window.CA_PLUGINS['Autotune'] = {
       name: "Autotune",
       create: createAutoTune
   };
 
-  // Bonus Reverb (Simple)
+  // Bonus Reverb
   window.CA_PLUGINS['Reverb'] = {
       name: "Reverb",
       create: () => { 
           const r = new Tone.Reverb({ decay: 2, wet: 0.5 });
-          return { input: r, output: r, name: "Reverb" }; // Wrapper for consistency
+          return { input: r, output: r, name: "Reverb" }; 
       }
   };
 
