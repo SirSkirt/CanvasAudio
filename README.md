@@ -2,7 +2,7 @@
 
 **A lightweight, browser-based DAW built with HTML5, Tone.js, and Electron.**
 
-CanvasAudio is an experimental Digital Audio Workstation that runs right in your browser (or on your desktop). It combines a classic Step Sequencer workflow with a linear Timeline arrangement view, making it easy to sketch out beats and ideas quickly.
+CanvasAudio is an experimental Digital Audio Workstation that runs right in your browser (for now, will be removing browser support for better feature implementations). It combines a classic Step Sequencer workflow with a linear Timeline arrangement view, making it easy to sketch out beats and ideas quickly.
 
 > ⚠️ **Status:** Alpha. Expect bugs, breaking changes, and rapid updates!
 
