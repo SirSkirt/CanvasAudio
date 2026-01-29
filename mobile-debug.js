@@ -3,8 +3,8 @@
  * Intercepts console logs and errors to display them on-screen for mobile devices.
  */
 
-(function() {
-    // 1. Detection (Same logic as mobile-ui.js)
+window.addEventListener('DOMContentLoaded', () => {
+    // 1. Detection
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) 
                      || window.innerWidth < 800;
 
@@ -35,10 +35,11 @@
     const clearBtn = document.createElement('button');
     clearBtn.innerText = "Clear";
     clearBtn.style.cssText = "position:absolute; top:5px; right:5px; padding:5px; background:#333; color:#fff; border:1px solid #555;";
-    clearBtn.onclick = () => { logContent.innerHTML = ''; };
     
     const logContent = document.createElement('div');
     logContent.style.marginTop = "25px";
+    
+    clearBtn.onclick = () => { logContent.innerHTML = ''; };
 
     consoleContainer.appendChild(clearBtn);
     consoleContainer.appendChild(logContent);
@@ -102,5 +103,4 @@
         console.error(`CRASH: ${message} (${source}:${lineno})`);
         return false;
     };
-
-})();
+});
