@@ -1,10 +1,9 @@
 /**
  * CanvasAudio Plugin Registry
- * v0.5.2 - Fixed Autotune Crash
+ * v0.5.3 - Robust Autotune Fix
  */
 
 (function(){
-  // 1. Initialize the Global Registry Object
   window.CA_PLUGINS = window.CA_PLUGINS || {};
 
   // --- AUTOTUNE FACTORY ---
@@ -66,7 +65,6 @@
 
       let bestOffset = -1;
       let bestCorrelation = 0;
-      
       const minLag = Math.floor(sampleRate / 1000);
       const maxLag = Math.floor(sampleRate / 80);
 
@@ -81,7 +79,6 @@
               bestOffset = lag;
           }
       }
-
       if(bestCorrelation < 0.001) return {freq: -1, confidence: 0};
       return { freq: sampleRate / bestOffset, confidence: bestCorrelation };
     }
@@ -90,6 +87,7 @@
     const inputNode = new Tone.Gain(1);
     const outputNode = new Tone.Gain(1);
     
+    // Initialize with a safe default
     const pitchShifter = new Tone.PitchShift({
       pitch: 0,
       windowSize: 0.1, 
@@ -115,6 +113,29 @@
     let timerId = null;
     let targetMidi = null;
 
+    // --- SAFETY HELPER (This fixes the crash) ---
+    function safelyRampPitch(value, time) {
+        if(!pitchShifter) return;
+
+        // 1. Try the smooth way (Signal)
+        if (pitchShifter.pitch && typeof pitchShifter.pitch.rampTo === 'function') {
+            try {
+                pitchShifter.pitch.rampTo(value, time);
+            } catch(e) {
+                // If it fails, fallback to direct set
+                pitchShifter.pitch.value = value;
+            }
+        } 
+        // 2. Try setting .value (AudioParam)
+        else if (pitchShifter.pitch && typeof pitchShifter.pitch.value !== 'undefined') {
+            pitchShifter.pitch.value = value;
+        } 
+        // 3. Last resort: direct property set
+        else {
+            pitchShifter.pitch = value;
+        }
+    }
+
     // --- Loop ---
     function update(){
       if(!state.enabled) return;
@@ -123,7 +144,6 @@
       const { freq, confidence } = yinDetect(buffer, Tone.context.sampleRate);
 
       if(freq <= 0 || confidence < 0.05) {
-        // Safe Reset
         safelyRampPitch(0, 0.2);
         return;
       }
@@ -140,29 +160,11 @@
       targetMidi = nearest;
 
       let shift = nearest - midiFloat;
+      // Clamp shift to prevent extreme artifacting
       if(shift > 12) shift = 12;
       if(shift < -12) shift = -12;
 
-      // Safe Update
-      safelyRampPitch(shift, state.retune);
-    }
-
-    // --- SAFE PITCH FUNCTION (The Fix) ---
-    function safelyRampPitch(value, time) {
-        if(!pitchShifter || typeof pitchShifter.pitch === 'undefined') return;
-
-        // Check if rampTo exists (Signal)
-        if (pitchShifter.pitch.rampTo && typeof pitchShifter.pitch.rampTo === 'function') {
-            pitchShifter.pitch.rampTo(value, time);
-        } 
-        // Fallback: Check if .value exists (Signal-like but missing ramp?)
-        else if (typeof pitchShifter.pitch.value !== 'undefined') {
-            pitchShifter.pitch.value = value;
-        } 
-        // Fallback: Primitive (Number)
-        else {
-            pitchShifter.pitch = value;
-        }
+      safelyRampPitch(shift, state.retune); 
     }
 
     function start(){
@@ -179,7 +181,6 @@
 
     start();
 
-    // RETURN THE ADVANCED OBJECT
     return {
       name: "AutoTune",
       input: inputNode,
@@ -192,15 +193,12 @@
         container.innerHTML = '';
         const style = "margin-bottom:10px; display:flex; align-items:center; gap:10px; font-size:12px; color:#ccc;";
         
-        // Key / Scale UI
         const row1 = document.createElement('div');
         row1.style.cssText = style;
-        
         const kSel = document.createElement('select');
         NOTE_NAMES.forEach(n => {
             const o = document.createElement('option');
-            o.value=n; o.textContent=n; 
-            kSel.appendChild(o);
+            o.value=n; o.textContent=n; kSel.appendChild(o);
         });
         kSel.value = state.key;
         kSel.onchange = (e) => state.key = e.target.value;
@@ -208,31 +206,24 @@
         const sSel = document.createElement('select');
         Object.keys(SCALE_INTERVALS).forEach(k => {
             const o = document.createElement('option');
-            o.value=k; o.textContent=k;
-            sSel.appendChild(o);
+            o.value=k; o.textContent=k; sSel.appendChild(o);
         });
         sSel.value = state.scale;
         sSel.onchange = (e) => state.scale = e.target.value;
-
         row1.append("Key:", kSel, "Scale:", sSel);
         container.appendChild(row1);
 
-        // Speed UI
         const row2 = document.createElement('div');
         row2.style.cssText = style;
-        
         const spd = document.createElement('input');
         spd.type = 'range'; spd.min = '0.01'; spd.max = '0.4'; spd.step = '0.01';
         spd.value = state.retune;
-        
         const lbl = document.createElement('span');
         lbl.textContent = Math.round(state.retune * 1000) + 'ms';
-        
         spd.oninput = (e) => {
             state.retune = parseFloat(e.target.value);
             lbl.textContent = Math.round(state.retune * 1000) + 'ms';
         };
-
         row2.append("Speed:", spd, lbl);
         container.appendChild(row2);
       },
@@ -247,12 +238,7 @@
   }
 
   // 2. REGISTER PLUGINS
-  window.CA_PLUGINS['Autotune'] = {
-      name: "Autotune",
-      create: createAutoTune
-  };
-
-  // Bonus Reverb
+  window.CA_PLUGINS['Autotune'] = { name: "Autotune", create: createAutoTune };
   window.CA_PLUGINS['Reverb'] = {
       name: "Reverb",
       create: () => { 
@@ -260,5 +246,4 @@
           return { input: r, output: r, name: "Reverb" }; 
       }
   };
-
 })();
