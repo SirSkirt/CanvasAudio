@@ -1,10 +1,10 @@
 /**
  * CanvasAudio Main Logic
- * v0.5.5 - Audio Playback Hardening
+ * v0.6.0 - Synthesized Drums (Crash Proof)
  */
 
 const APP_STAGE = "Alpha";
-const APP_VERSION = "0.5.5";
+const APP_VERSION = "0.6.0";
 window.CA_VERSION = APP_VERSION;
 
 const instruments = [
@@ -54,32 +54,40 @@ let state = {
 
 if(state.playlist.length === 0) for(let i=0; i<8; i++) state.playlist.push([]);
 
-// AUDIO ENGINE
-const drumSamples = new Tone.Players({
-    "Kick": "https://tonejs.github.io/audio/drum-samples/Techno/kick.mp3",
-    "Snare": "https://tonejs.github.io/audio/drum-samples/Techno/snare.mp3"
-}).toDestination();
+// --- NEW SYNTH AUDIO ENGINE (NO SAMPLES = NO CRASHES) ---
+const kickSynth = new Tone.MembraneSynth().toDestination();
+kickSynth.volume.value = -5;
 
-const hatSynth = new Tone.MetalSynth({ envelope: { attack: 0.001, decay: 0.1, release: 0.01 }, harmonicity: 5.1, modulationIndex: 32, resonance: 4000, octaves: 1.5 }).toDestination(); hatSynth.volume.value = -15;
-const clapSynth = new Tone.NoiseSynth({ noise: { type: 'white' }, envelope: { attack: 0.005, decay: 0.1, sustain: 0 } }).toDestination(); clapSynth.volume.value = -10;
+const snareSynth = new Tone.NoiseSynth({
+    noise: { type: 'white' },
+    envelope: { attack: 0.005, decay: 0.2, sustain: 0 }
+}).toDestination();
+snareSynth.volume.value = -10;
+
+const hatSynth = new Tone.MetalSynth({
+    envelope: { attack: 0.001, decay: 0.05, release: 0.01 },
+    harmonicity: 5.1, modulationIndex: 32, resonance: 4000, octaves: 1.5
+}).toDestination();
+hatSynth.volume.value = -15;
+
+const clapSynth = new Tone.NoiseSynth({
+    noise: { type: 'pink' },
+    envelope: { attack: 0.005, decay: 0.1, sustain: 0 }
+}).toDestination();
+clapSynth.volume.value = -10;
+
 let activeSources = [];
 
-// --- SAFE PLAY FUNCTIONS ---
-function safePlayDrum(name, time) {
-    if(!drumSamples) return;
-    try {
-        if(drumSamples.has(name)) drumSamples.player(name).start(time);
-    } catch(e) {}
-}
 
+// --- ROBUST AUDIO PLAYER ---
 function playAudioClip(id, time, trackIndex, rawOffset) {
     const clipData = state.audioClips[id];
     if(!clipData || !clipData.buffer) return;
 
-    // 1. Validate Offset (The Crash Fix)
+    // Validate Offset to prevent "Start time error"
     let offset = rawOffset || 0;
     if (offset < 0) offset = 0;
-    if (offset >= clipData.buffer.duration) return; // Don't play if we are past the end
+    if (offset >= clipData.buffer.duration) return; 
 
     const ctx = Tone.context.rawContext;
     const src = ctx.createBufferSource();
@@ -88,13 +96,11 @@ function playAudioClip(id, time, trackIndex, rawOffset) {
     const t = ensureTrackAudio(trackIndex);
     src.connect(t.input);
 
-    // 2. Wrap in robust Try/Catch to prevent "Script Error" crash
     try { 
-        // We calculate duration to ensure we don't play past buffer end
         const duration = clipData.buffer.duration - offset;
         src.start(time, offset, duration); 
     } catch(e) { 
-        console.error("Audio Playback Error:", e);
+        console.error("Audio Clip Error:", e);
     }
 
     activeSources.push(src);
@@ -103,6 +109,7 @@ function playAudioClip(id, time, trackIndex, rawOffset) {
         if(i>-1) activeSources.splice(i,1); 
     };
 }
+
 
 // --- UI CONTROL FUNCTIONS ---
 function setMode(m) {
@@ -572,16 +579,17 @@ Tone.Transport.scheduleRepeat((time) => {
     state.currentStep++;
 }, "16n");
 
+// --- UPDATED PLAY FUNCTIONS (USE SYNTHS) ---
 function playPatternStep(grid, stepIdx, time) {
-    if(grid[0][stepIdx]) safePlayDrum("Kick", time);
-    if(grid[1][stepIdx]) safePlayDrum("Snare", time);
+    if(grid[0][stepIdx]) kickSynth.triggerAttackRelease("C1", "8n", time);
+    if(grid[1][stepIdx]) snareSynth.triggerAttackRelease("8n", time);
     if(grid[2][stepIdx]) hatSynth.triggerAttackRelease("32n", time);
     if(grid[3][stepIdx]) clapSynth.triggerAttackRelease("16n", time);
 }
 
 function playInst(idx, time) {
-    if(idx===0) safePlayDrum("Kick", time);
-    if(idx===1) safePlayDrum("Snare", time);
+    if(idx===0) kickSynth.triggerAttackRelease("C1", "8n", time);
+    if(idx===1) snareSynth.triggerAttackRelease("8n", time);
     if(idx===2) hatSynth.triggerAttackRelease("32n", time);
     if(idx===3) clapSynth.triggerAttackRelease("16n", time);
 }
@@ -604,12 +612,9 @@ function openFxWindow(trackIndex){
     const overlay = document.getElementById('fxOverlay');
     const win = document.getElementById('fxWindow');
     if(!overlay || !win) return;
-    
-    // 1. Set Title
     const title = document.getElementById('fxWinTitle');
     if(title) title.innerText = `Effects (Track ${trackIndex + 1})`;
 
-    // 2. Populate Plugin List
     const select = document.getElementById('fxPluginSelect');
     select.innerHTML = ''; 
     
@@ -627,9 +632,8 @@ function openFxWindow(trackIndex){
         select.appendChild(opt);
     }
 
-    // 3. Wire up "Add" Button
     const addBtn = document.getElementById('fxAddPluginBtn');
-    const newBtn = addBtn.cloneNode(true); // Clear old listeners
+    const newBtn = addBtn.cloneNode(true); 
     addBtn.parentNode.replaceChild(newBtn, addBtn);
     
     newBtn.onclick = () => {
@@ -637,7 +641,6 @@ function openFxWindow(trackIndex){
         if(pluginKey) addPluginToTrack(trackIndex, pluginKey);
     };
 
-    // 4. Render Slots
     renderFxSlots(trackIndex);
     overlay.style.display = 'flex';
     document.getElementById('fxCloseBtn').onclick = () => overlay.style.display = 'none';
@@ -662,13 +665,11 @@ function renderFxSlots(trackIndex) {
             name.style.color = "#ff9800";
             name.style.marginRight = "10px";
 
-            // UI Button for Plugin (if it has custom UI)
             if(slot.node.mountUI) {
                 const uiBtn = document.createElement('button');
                 uiBtn.innerText = "⚙";
                 uiBtn.style.cssText = "background:none; border:none; color:#bbb; cursor:pointer;";
                 uiBtn.onclick = () => {
-                    // Quick modal for plugin UI
                     const uiDiv = document.createElement('div');
                     uiDiv.style.cssText = "margin-top:5px; background:#222; padding:5px; border-radius:4px;";
                     slot.node.mountUI(uiDiv);
@@ -731,12 +732,10 @@ function updateTrackAudioChain(trackIndex) {
 
     slots.forEach(slot => {
         if (slot && slot.node) {
-            // Advanced Node (Separate Input/Output)
             if (slot.node.input && slot.node.output) {
                 currentNode.connect(slot.node.input);
                 currentNode = slot.node.output;
             } else {
-                // Simple Node
                 currentNode.connect(slot.node);
                 currentNode = slot.node;
             }
