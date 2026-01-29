@@ -1,10 +1,10 @@
 /**
  * CanvasAudio Main Logic
- * v0.5.3 - Safety Checks & Drum Fixes
+ * v0.5.4 - "Nuclear" Safety Patch
  */
 
 const APP_STAGE = "Alpha";
-const APP_VERSION = "0.5.3";
+const APP_VERSION = "0.5.4";
 window.CA_VERSION = APP_VERSION;
 
 const instruments = [
@@ -63,6 +63,19 @@ const drumSamples = new Tone.Players({
 const hatSynth = new Tone.MetalSynth({ envelope: { attack: 0.001, decay: 0.1, release: 0.01 }, harmonicity: 5.1, modulationIndex: 32, resonance: 4000, octaves: 1.5 }).toDestination(); hatSynth.volume.value = -15;
 const clapSynth = new Tone.NoiseSynth({ noise: { type: 'white' }, envelope: { attack: 0.005, decay: 0.1, sustain: 0 } }).toDestination(); clapSynth.volume.value = -10;
 let activeSources = [];
+
+// --- HELPER: SAFE DRUM PLAY (The Fix) ---
+function safePlayDrum(name, time) {
+    if(!drumSamples) return;
+    try {
+        if(drumSamples.has(name)) {
+             drumSamples.player(name).start(time);
+        }
+    } catch(e) {
+        // Silently fail if sample isn't ready
+        // console.warn("Drum not ready:", name);
+    }
+}
 
 // --- UI CONTROL FUNCTIONS ---
 function setMode(m) {
@@ -533,9 +546,8 @@ Tone.Transport.scheduleRepeat((time) => {
 }, "16n");
 
 function playPatternStep(grid, stepIdx, time) {
-    // UPDATED: Check if sample is loaded before playing
-    if(grid[0][stepIdx] && drumSamples.has("Kick")) drumSamples.player("Kick").start(time);
-    if(grid[1][stepIdx] && drumSamples.has("Snare")) drumSamples.player("Snare").start(time);
+    if(grid[0][stepIdx]) safePlayDrum("Kick", time);
+    if(grid[1][stepIdx]) safePlayDrum("Snare", time);
     if(grid[2][stepIdx]) hatSynth.triggerAttackRelease("32n", time);
     if(grid[3][stepIdx]) clapSynth.triggerAttackRelease("16n", time);
 }
@@ -554,9 +566,8 @@ function playAudioClip(id, time, trackIndex, offset) {
 }
 
 function playInst(idx, time) {
-    // UPDATED: Check if sample is loaded before playing
-    if(idx===0 && drumSamples.has("Kick")) drumSamples.player("Kick").start(time);
-    if(idx===1 && drumSamples.has("Snare")) drumSamples.player("Snare").start(time);
+    if(idx===0) safePlayDrum("Kick", time);
+    if(idx===1) safePlayDrum("Snare", time);
     if(idx===2) hatSynth.triggerAttackRelease("32n", time);
     if(idx===3) clapSynth.triggerAttackRelease("16n", time);
 }
