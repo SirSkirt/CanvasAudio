@@ -34,6 +34,9 @@ You can still try the [Web Demo here](https://sirskirt.github.io/CanvasAudio), b
 
 ## 📝 Changelog
 
+### **v0.6.0 - "Stress" Update (Bugfixes)
+*This release stresses us out because we try to fix a bug and break 10 other things*
+
 ### **v0.5.0 - The "Toolbox" Update**
 *This release focuses on workflow speed and the transition to a desktop-first experience.*
 
