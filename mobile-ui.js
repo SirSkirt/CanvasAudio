@@ -3,7 +3,7 @@
  * transforming the Desktop layout into a Mobile Tabbed App
  */
 
-(function() {
+window.addEventListener('DOMContentLoaded', () => {
     // 1. Detection
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) 
                      || window.innerWidth < 800;
@@ -30,10 +30,12 @@
             btn.addEventListener('click', (e) => {
                 // UI Toggle
                 document.querySelectorAll('.mob-nav-btn').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active'); // Use the button itself, not e.target (icon clicks)
-                
-                // View Switch
-                switchView(btn.dataset.target);
+                // Use closest to handle icon clicks
+                const targetBtn = e.target.closest('.mob-nav-btn');
+                if(targetBtn) {
+                    targetBtn.classList.add('active');
+                    switchView(targetBtn.dataset.target);
+                }
             });
         });
     }
@@ -49,8 +51,6 @@
         if(sidebar) sidebar.style.display = 'none';
         if(playlist) playlist.style.display = 'none';
         if(rack) rack.style.display = 'none';
-        
-        // Hide Mixer specifically (it's an overlay usually)
         if(mixer) mixer.style.display = 'none'; 
 
         // SHOW TARGET
@@ -61,14 +61,12 @@
             case 'sequencer':
                 if(rack) {
                     rack.style.display = 'flex';
-                    rack.style.height = '100%'; // Full screen rack
+                    rack.style.height = '100%'; 
                 }
                 break;
             case 'mixer':
-                // We use the existing openMixerWindow function if available, else manual
                 if(typeof window.openMixerWindow === 'function') {
                     window.openMixerWindow();
-                    // Force it to look like a tab, not a modal
                     if(mixer) {
                         mixer.style.display = 'flex';
                         mixer.classList.add('mobile-tab-view');
@@ -78,23 +76,17 @@
             case 'browser':
                 if(sidebar) {
                     sidebar.style.display = 'flex';
-                    sidebar.style.width = '100%'; // Full screen browser
+                    sidebar.style.width = '100%'; 
                 }
                 break;
         }
     }
 
-    // 4. Initialization
-    window.addEventListener('load', () => {
-        // Delay slightly to let main init finish
-        setTimeout(() => {
-            createMobileNav();
-            switchView('playlist'); // Default view
+    // 4. Run
+    createMobileNav();
+    switchView('playlist'); // Default view
             
-            // Fixes: Remove explicit heights that break mobile flex
-            const rack = document.querySelector('.channel-rack');
-            if(rack) rack.style.minHeight = '0'; 
-        }, 100);
-    });
-
-})();
+    // Fixes: Remove explicit heights that break mobile flex
+    const rack = document.querySelector('.channel-rack');
+    if(rack) rack.style.minHeight = '0'; 
+});
