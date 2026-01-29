@@ -501,6 +501,10 @@ function renderPlaylist() {
             };
 
             l.appendChild(el);
+            if (clip.type === 'audio') {
+                const cd = state.audioClips[clip.id];
+                if (cd && cd.peaks) attachClipWaveform(el, cd);
+            }
         });
         row.appendChild(l);
         c.appendChild(row);
@@ -602,11 +606,92 @@ async function handleAudioUpload(input) {
     try {
         const arrayBuffer = await file.arrayBuffer();
         const audioBuffer = await Tone.context.rawContext.decodeAudioData(arrayBuffer);
-        state.audioClips[id] = { id, name: file.name, buffer: audioBuffer, duration: audioBuffer.duration };
+        state.audioClips[id] = { id, name: file.name, buffer: audioBuffer, duration: audioBuffer.duration, peaks: computeWaveformPeaks(audioBuffer) };
         renderResources();
         selectResource('audio', id);
     } catch (err) { alert("Error decoding audio file."); }
 }
+
+// --- WAVEFORM PEAKS (for playlist clip rendering) ---
+function computeWaveformPeaks(audioBuffer, points = 800) {
+    try {
+        const ch0 = audioBuffer.getChannelData(0);
+        const ch1 = audioBuffer.numberOfChannels > 1 ? audioBuffer.getChannelData(1) : null;
+        const len = ch0.length;
+        if(len === 0) return [];
+        const blockSize = Math.max(1, Math.floor(len / points));
+        const peaks = new Array(points);
+        for (let i = 0; i < points; i++) {
+            const start = i * blockSize;
+            const end = Math.min(len, start + blockSize);
+            let min = 1.0, max = -1.0;
+            for (let j = start; j < end; j++) {
+                const v0 = ch0[j];
+                const v = ch1 ? (v0 + ch1[j]) * 0.5 : v0;
+                if (v < min) min = v;
+                if (v > max) max = v;
+            }
+            peaks[i] = [min, max];
+        }
+        return peaks;
+    } catch (e) {
+        console.warn('Waveform peak calc failed', e);
+        return [];
+    }
+}
+
+function drawWaveformToCanvas(peaks, canvas) {
+    if(!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if(!ctx) return;
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    if(!peaks || peaks.length === 0) return;
+    // subtle waveform (no hard-coded theme changes)
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1;
+    const mid = Math.floor(h / 2);
+    const step = w / peaks.length;
+    ctx.beginPath();
+    for(let i=0; i<peaks.length; i++){
+        const x = Math.floor(i * step);
+        const p = peaks[i];
+        const y1 = mid + Math.floor(p[0] * mid);
+        const y2 = mid + Math.floor(p[1] * mid);
+        ctx.moveTo(x, y1);
+        ctx.lineTo(x, y2);
+    }
+    ctx.stroke();
+}
+
+function attachClipWaveform(clipEl, clipData) {
+    if(!clipEl || !clipData || !clipData.peaks || clipData.peaks.length === 0) return;
+    // Ensure relative positioning so the canvas can overlay
+    if(getComputedStyle(clipEl).position === 'static') {
+        clipEl.style.position = 'relative';
+    }
+    const canvas = document.createElement('canvas');
+    canvas.className = 'clip-waveform';
+    canvas.style.position = 'absolute';
+    canvas.style.left = '0';
+    canvas.style.top = '0';
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
+    canvas.style.pointerEvents = 'none';
+    clipEl.appendChild(canvas);
+
+    requestAnimationFrame(() => {
+        const rect = clipEl.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        const cw = Math.max(1, Math.floor(rect.width * dpr));
+        const ch = Math.max(1, Math.floor(rect.height * dpr));
+        canvas.width = cw;
+        canvas.height = ch;
+        drawWaveformToCanvas(clipData.peaks, canvas);
+    });
+}
+
 
 function openFxWindow(trackIndex){
     const overlay = document.getElementById('fxOverlay');
