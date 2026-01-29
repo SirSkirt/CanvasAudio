@@ -1,10 +1,10 @@
 /**
  * CanvasAudio Main Logic
- * v0.5.4 - "Nuclear" Safety Patch
+ * v0.5.5 - Audio Playback Hardening
  */
 
 const APP_STAGE = "Alpha";
-const APP_VERSION = "0.5.4";
+const APP_VERSION = "0.5.5";
 window.CA_VERSION = APP_VERSION;
 
 const instruments = [
@@ -64,17 +64,44 @@ const hatSynth = new Tone.MetalSynth({ envelope: { attack: 0.001, decay: 0.1, re
 const clapSynth = new Tone.NoiseSynth({ noise: { type: 'white' }, envelope: { attack: 0.005, decay: 0.1, sustain: 0 } }).toDestination(); clapSynth.volume.value = -10;
 let activeSources = [];
 
-// --- HELPER: SAFE DRUM PLAY (The Fix) ---
+// --- SAFE PLAY FUNCTIONS ---
 function safePlayDrum(name, time) {
     if(!drumSamples) return;
     try {
-        if(drumSamples.has(name)) {
-             drumSamples.player(name).start(time);
-        }
-    } catch(e) {
-        // Silently fail if sample isn't ready
-        // console.warn("Drum not ready:", name);
+        if(drumSamples.has(name)) drumSamples.player(name).start(time);
+    } catch(e) {}
+}
+
+function playAudioClip(id, time, trackIndex, rawOffset) {
+    const clipData = state.audioClips[id];
+    if(!clipData || !clipData.buffer) return;
+
+    // 1. Validate Offset (The Crash Fix)
+    let offset = rawOffset || 0;
+    if (offset < 0) offset = 0;
+    if (offset >= clipData.buffer.duration) return; // Don't play if we are past the end
+
+    const ctx = Tone.context.rawContext;
+    const src = ctx.createBufferSource();
+    src.buffer = clipData.buffer;
+    
+    const t = ensureTrackAudio(trackIndex);
+    src.connect(t.input);
+
+    // 2. Wrap in robust Try/Catch to prevent "Script Error" crash
+    try { 
+        // We calculate duration to ensure we don't play past buffer end
+        const duration = clipData.buffer.duration - offset;
+        src.start(time, offset, duration); 
+    } catch(e) { 
+        console.error("Audio Playback Error:", e);
     }
+
+    activeSources.push(src);
+    src.onended = () => { 
+        const i = activeSources.indexOf(src); 
+        if(i>-1) activeSources.splice(i,1); 
+    };
 }
 
 // --- UI CONTROL FUNCTIONS ---
@@ -550,19 +577,6 @@ function playPatternStep(grid, stepIdx, time) {
     if(grid[1][stepIdx]) safePlayDrum("Snare", time);
     if(grid[2][stepIdx]) hatSynth.triggerAttackRelease("32n", time);
     if(grid[3][stepIdx]) clapSynth.triggerAttackRelease("16n", time);
-}
-
-function playAudioClip(id, time, trackIndex, offset) {
-    const clipData = state.audioClips[id];
-    if(!clipData || !clipData.buffer) return;
-    const ctx = Tone.context.rawContext;
-    const src = ctx.createBufferSource();
-    src.buffer = clipData.buffer;
-    const t = ensureTrackAudio(trackIndex);
-    src.connect(t.input);
-    try { src.start(time, offset); } catch(e) { src.start(time); }
-    activeSources.push(src);
-    src.onended = () => { const i = activeSources.indexOf(src); if(i>-1) activeSources.splice(i,1); };
 }
 
 function playInst(idx, time) {
