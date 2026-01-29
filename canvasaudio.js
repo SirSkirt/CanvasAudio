@@ -1,10 +1,10 @@
 /**
  * CanvasAudio Main Logic
- * v0.5.1 - FX & Plugin Support
+ * v0.5.2 - Fixed Missing UI Functions
  */
 
 const APP_STAGE = "Alpha";
-const APP_VERSION = "0.5.1";
+const APP_VERSION = "0.5.2";
 window.CA_VERSION = APP_VERSION;
 
 const instruments = [
@@ -17,7 +17,7 @@ const instruments = [
 let state = {
     audioReady: false,
     isPlaying: false,
-    mode: 'PATTERN',
+    mode: 'PATTERN', // 'PATTERN' | 'SONG'
     bpm: 128,
     currentStep: 0,
     timeSig: 4, 
@@ -63,7 +63,37 @@ const hatSynth = new Tone.MetalSynth({ envelope: { attack: 0.001, decay: 0.1, re
 const clapSynth = new Tone.NoiseSynth({ noise: { type: 'white' }, envelope: { attack: 0.005, decay: 0.1, sustain: 0 } }).toDestination(); clapSynth.volume.value = -10;
 let activeSources = [];
 
-// --- TOOL FUNCTIONS ---
+// --- UI CONTROL FUNCTIONS (RESTORED) ---
+function setMode(m) {
+    state.mode = m;
+    // Update UI Buttons
+    document.getElementById('mode-pat').className = m === 'PATTERN' ? 'active' : '';
+    document.getElementById('mode-song').className = m === 'SONG' ? 'active' : '';
+    
+    // Stop transport when switching to reset playhead logic
+    stopTransport();
+}
+
+function updateBPM(val) {
+    state.bpm = parseInt(val);
+    Tone.Transport.bpm.value = state.bpm;
+}
+
+function updateTimeSig(val) {
+    state.timeSig = parseInt(val);
+    Tone.Transport.timeSignature = state.timeSig;
+    // Regenerate grid if necessary in future versions
+}
+
+function clearCurrentPattern() {
+    if (!state.selectedResId || !state.patterns[state.selectedResId]) return;
+    const pat = state.patterns[state.selectedResId];
+    pat.grid = createEmptyGrid(4); // Reset grid
+    renderChannelRack();
+}
+
+
+// --- EDIT TOOLS ---
 function editTool(action) {
     if (action === 'paste') { pasteClipAtPlayhead(); return; }
     if (!state.selectedClip) { alert("Please select a clip first."); return; }
@@ -160,7 +190,7 @@ function checkEnvironment() {
     } else {
         console.log("Running in Browser Mode");
         if(titleBar) titleBar.style.display = 'none';
-        if(banner) banner.style.display = 'none'; // Clean Web Mode
+        if(banner) banner.style.display = 'none'; 
     }
 }
 
@@ -412,6 +442,7 @@ function renderPlaylist() {
         };
         clips.forEach((clip, clipIndex) => {
             const el = document.createElement('div');
+            // ENSURING clip-audio CLASS IS APPLIED
             el.className = `clip ${clip.type === 'pattern' ? 'clip-pattern' : 'clip-audio'}`;
             if (state.selectedClip && state.selectedClip.trackIndex === idx && state.selectedClip.clipIndex === clipIndex) {
                 el.classList.add('selected-clip');
@@ -547,7 +578,7 @@ async function handleAudioUpload(input) {
     } catch (err) { alert("Error decoding audio file."); }
 }
 
-// --- NEW FX WINDOW LOGIC ---
+// --- FX WINDOW LOGIC (UNCHANGED) ---
 
 function openFxWindow(trackIndex){
     const overlay = document.getElementById('fxOverlay');
