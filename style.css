@@ -334,3 +334,86 @@ body {
     height: 40px; /* Fat finger friendly */
     font-size: 14px;
 }
+/* --- 🚀 FULL GLASS UI OVERHAUL --- */
+
+/* 1. Global Glass Variable */
+:root {
+    --glass-bg: rgba(20, 20, 20, 0.75);
+    --glass-border: rgba(255, 255, 255, 0.08);
+    --glass-blur: blur(12px);
+    --neon-orange: #ff9800;
+}
+
+/* 2. The Top Toolbar (Glassified) */
+.toolbar {
+    background: var(--glass-bg) !important;
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border-bottom: 1px solid var(--glass-border);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+}
+
+/* 3. The Track Headers (Left Side) */
+.track-header {
+    background: rgba(30, 30, 30, 0.6) !important;
+    backdrop-filter: blur(5px);
+    border-bottom: 1px solid var(--glass-border);
+    border-right: 1px solid var(--glass-border);
+    color: #ccc;
+}
+
+/* 4. The Playlist Grid (Background) */
+.playlist-container, .channel-rack {
+    background: transparent !important; /* Let the body gradient show through */
+}
+.track-lane {
+    border-bottom: 1px solid rgba(255,255,255,0.03); /* Subtle grid lines */
+}
+.track-lane:nth-child(even) {
+    background: rgba(255,255,255,0.02); /* Zebra stripe */
+}
+
+/* 5. Modals & Menus (The "New Project" Popup) */
+#mainMenuOverlay, .modal-content, #fxWindow, #mixerOverlay {
+    background: rgba(15, 15, 15, 0.85) !important;
+    backdrop-filter: blur(16px) !important;
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--glass-border);
+    box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+    border-radius: 16px; /* Rounder corners */
+}
+
+.menu-btn, .modal-btn {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid var(--glass-border);
+    color: #fff;
+    transition: all 0.2s;
+}
+.menu-btn:hover {
+    background: rgba(255,255,255,0.1);
+    border-color: var(--neon-orange);
+}
+
+/* 6. The "Audio Ready" Pill (Bottom Right) */
+#audioStatusPanel {
+    background: rgba(0, 0, 0, 0.8) !important;
+    backdrop-filter: blur(8px);
+    border: 1px solid var(--glass-border);
+    border-radius: 30px; /* Pill shape */
+    bottom: 90px !important; /* Move UP above the new nav bar */
+    box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+}
+
+/* 7. Buttons (Orange Glow) */
+#play-btn.active, #record-btn.active {
+    box-shadow: 0 0 15px var(--neon-orange);
+    border-color: var(--neon-orange);
+}
+
+/* 8. Make the Timeline Ruler Transparent */
+#ruler {
+    background: var(--glass-bg);
+    border-bottom: 1px solid var(--glass-border);
+    color: #888;
+}
+
