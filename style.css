@@ -225,65 +225,88 @@ button#stop-btn:hover { background: #d32f2f; }
     overscroll-behavior: none; 
 }
 
-/* 1. Mobile Navigation Bar (Bottom) */
-#mobile-nav {
-    position: fixed;
-    bottom: 0; left: 0; right: 0;
-    height: 60px;
-    background: #1a1a1a;
-    border-top: 1px solid #333;
-    display: flex;
-    justify-content: space-around;
-    align-items: center;
-    z-index: 20000;
-    padding-bottom: env(safe-area-inset-bottom); /* iPhone Home Bar fix */
+/* --- GLASSMORPHISM THEME --- */
+
+body {
+    /* Deep Dark Gradient Background */
+    background: radial-gradient(circle at 50% -20%, #2a2a2a, #0a0a0a);
+    color: #eee;
 }
 
-.mob-nav-btn {
-    background: none; border: none;
-    color: #777; font-size: 10px;
-    text-align: center;
-    flex: 1; height: 100%;
+/* 1. Glass Container Utility */
+.glass-panel, 
+.mobile-mode .track-header,
+.mobile-mode .sidebar,
+.mobile-mode .channel-rack {
+    background: rgba(20, 20, 20, 0.6) !important;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-right: 1px solid rgba(255, 255, 255, 0.05);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-.mob-nav-btn i { font-size: 18px; margin-bottom: 4px; display: block; }
-.mob-nav-btn.active { color: var(--accent); background: #222; }
+/* 2. Playlist Track Rows (Zebra Striping with Glass) */
+.mobile-mode .track-row {
+    background: transparent !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+.mobile-mode .track-row:nth-child(even) {
+    background: rgba(255, 255, 255, 0.02) !important;
+}
 
-/* 2. Layout Adjustments */
+/* 3. Clips (Glossy Look) */
+.mobile-mode .clip {
+    border-radius: 6px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.2), 0 2px 5px rgba(0,0,0,0.3);
+    border: 1px solid rgba(0,0,0,0.2);
+    font-size: 10px;
+    font-weight: bold;
+    letter-spacing: 0.5px;
+}
+
+/* 4. Toolbar Glass */
 .mobile-mode .toolbar {
-    height: auto;
-    flex-wrap: wrap;
-    padding: 10px;
-    gap: 8px;
-    /* Make toolbar scrollable horizontally if too many buttons */
-    overflow-x: auto; 
+    background: rgba(0, 0, 0, 0.7) !important;
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    padding: 15px;
 }
 
+/* 5. Mobile Sequencer Buttons (Pills) */
+.mobile-mode .step {
+    border-radius: 4px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.05);
+    box-shadow: none;
+}
+.mobile-mode .step.active {
+    background: var(--accent);
+    box-shadow: 0 0 10px var(--accent);
+    border: none;
+}
+
+/* 6. Mixer Faders (Modern) */
+.mobile-mode .mixer-strip {
+    background: rgba(255,255,255,0.02);
+    border-right: 1px solid rgba(255,255,255,0.05);
+    border-radius: 8px;
+    margin: 4px;
+}
+
+/* Hide Desktop Scrollbars on Mobile */
+.mobile-mode ::-webkit-scrollbar {
+    width: 4px; height: 4px;
+}
+.mobile-mode ::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.2);
+    border-radius: 10px;
+}
+
+/* Adjust Workspace for new Nav Bar height */
 .mobile-mode .workspace {
-    /* Push up to make room for nav bar */
-    padding-bottom: 60px; 
-    flex-direction: column;
+    padding-bottom: 90px; /* More room for the floating nav */
 }
 
-/* 3. Make Views Full Screen */
-.mobile-mode .playlist-container,
-.mobile-mode .channel-rack,
-.mobile-mode .sidebar {
-    width: 100% !important;
-    height: 100% !important;
-    flex: 1;
-}
-
-.mobile-mode .playlist-header {
-    /* Fix sticky header on mobile */
-    position: sticky; top: 0; z-index: 20;
-}
-
-/* 4. Mixer Overlay as a Tab */
-.mobile-mode .mixer-modal {
-    width: 100%; height: 100%;
-    max-width: none; max-height: none;
-    border: none; border-radius: 0;
     padding-bottom: 80px; /* Room for nav */
 }
 .mobile-mode .modal-close { display: none; } /* Hide close X, use tabs instead */
