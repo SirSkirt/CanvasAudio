@@ -417,3 +417,7 @@ body {
     color: #888;
 }
 
+
+
+/* Record button active state */
+#record-btn.active-record{ outline: 2px solid #f00; }

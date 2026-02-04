@@ -394,6 +394,110 @@ function stopTransport() {
     document.querySelectorAll('.step.playing').forEach(s => s.classList.remove('playing'));
 }
 
+
+// --- RECORDING (MIC -> AUDIO CLIP) ---
+function setRecordButtonUI(){
+    const btn = document.getElementById('record-btn');
+    if(!btn) return;
+    if(state.isRecording){
+        btn.classList.add('active-record');
+        btn.innerHTML = '<i class="fas fa-stop"></i>';
+        btn.title = 'Stop Recording';
+    } else {
+        btn.classList.remove('active-record');
+        btn.innerHTML = '<i class="fas fa-circle"></i>';
+        btn.title = 'Record';
+    }
+}
+
+async function toggleRecord(){
+    // Only allow recording when audio is started
+    if(!state.audioReady){
+        showToast && showToast('Start Audio first');
+        return;
+    }
+    if(state.isRecording){
+        stopRecording();
+    } else {
+        startRecording();
+    }
+}
+
+async function startRecording(){
+    try {
+        if(state.mediaRecorder && state.mediaRecorder.state !== 'inactive'){
+            return;
+        }
+        // Request mic
+        const constraints = { audio: true };
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        state.mediaStream = stream;
+
+        const chunks = [];
+        const mr = new MediaRecorder(stream);
+        state.mediaRecorder = mr;
+        state.isRecording = true;
+        setRecordButtonUI();
+
+        mr.ondataavailable = (e)=>{ if(e.data && e.data.size>0) chunks.push(e.data); };
+        mr.onerror = ()=>{ /* rely on overlay */ };
+        mr.onstop = async ()=>{
+            try{
+                const blob = new Blob(chunks, { type: mr.mimeType || 'audio/webm' });
+                const arrayBuffer = await blob.arrayBuffer();
+                const audioBuffer = await Tone.context.rawContext.decodeAudioData(arrayBuffer);
+
+                const id = 'rec_' + Date.now();
+                const name = 'Recording ' + new Date().toLocaleTimeString();
+                state.audioClips[id] = { id, name, buffer: audioBuffer, duration: audioBuffer.duration, peaks: computeWaveformPeaks(audioBuffer) };
+
+                // Place on track 1 at current playhead (SONG) or at bar 0 (PATTERN)
+                const trackIdx = 0;
+                const startBar = (state.mode === 'SONG') ? (Math.max(0, (state.currentStep||0)) / 16) : 0;
+                state.selectedResType = 'audio';
+                state.selectedResId = id;
+                addClipToTrack(trackIdx, startBar);
+                renderResourceLists();
+            } finally {
+                // cleanup stream
+                if(state.mediaStream){
+                    state.mediaStream.getTracks().forEach(t=>t.stop());
+                    state.mediaStream = null;
+                }
+                state.mediaRecorder = null;
+                state.isRecording = false;
+                setRecordButtonUI();
+            }
+        };
+
+        mr.start();
+    } catch(err){
+        state.isRecording = false;
+        setRecordButtonUI();
+        console.error(err);
+    }
+}
+
+function stopRecording(){
+    try{
+        if(state.mediaRecorder && state.mediaRecorder.state !== 'inactive'){
+            state.mediaRecorder.stop();
+        } else {
+            // ensure cleanup
+            if(state.mediaStream){
+                state.mediaStream.getTracks().forEach(t=>t.stop());
+                state.mediaStream = null;
+            }
+            state.mediaRecorder = null;
+            state.isRecording = false;
+            setRecordButtonUI();
+        }
+    } catch(err){
+        console.error(err);
+    }
+}
+
+
 function saveProjectToStorage() {
     const data = { version: APP_VERSION, date: Date.now(), bpm: state.bpm, patterns: state.patterns, playlist: state.playlist, mixer: state.mixer };
     localStorage.setItem('canvas_project_autosave', JSON.stringify(data));
