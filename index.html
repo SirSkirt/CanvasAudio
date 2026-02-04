@@ -2,18 +2,30 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Canvas Audio</title>
-  <meta name="color-scheme" content="dark light">
+
+  <!-- Tailwind (for page + any temporary overlay input) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
   <style>
-    html, body { height: 100%; margin: 0; background: #0b0d12; }
+    html, body { height: 100%; margin: 0; }
+    body { overflow: hidden; }
+    #appWrap { position: fixed; inset: 0; }
     #app { width: 100vw; height: 100vh; display: block; }
-    /* Prevent scroll/selection on touch */
-    body { overscroll-behavior: none; touch-action: none; }
+
+    /* Overlay input used for BPM editing (created dynamically) */
+    .ca-overlay-input {
+      position: fixed;
+      z-index: 50;
+      outline: none;
+    }
   </style>
 </head>
-<body>
-  <canvas id="app" aria-label="Canvas Audio"></canvas>
+<body class="bg-slate-950">
+  <div id="appWrap">
+    <canvas id="app" aria-label="Canvas Audio"></canvas>
+  </div>
 
   <!-- Tone.js (global Tone) -->
   <script src="https://unpkg.com/tone@14.8.49/build/Tone.js"></script>
