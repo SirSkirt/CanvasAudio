@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Canvas Audio</title>
+  <meta name="color-scheme" content="dark light">
+  <style>
+    html, body { height: 100%; margin: 0; background: #0b0d12; }
+    #app { width: 100vw; height: 100vh; display: block; }
+    /* Prevent scroll/selection on touch */
+    body { overscroll-behavior: none; touch-action: none; }
+  </style>
+</head>
+<body>
+  <canvas id="app" aria-label="Canvas Audio"></canvas>
+
+  <!-- Tone.js (global Tone) -->
+  <script src="https://unpkg.com/tone@14.8.49/build/Tone.js"></script>
+
+  <!-- App entry (ESM) -->
+  <script type="module" src="./canvasaudio.js"></script>
+</body>
+</html>
