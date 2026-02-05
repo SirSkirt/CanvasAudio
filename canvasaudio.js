@@ -9,11 +9,17 @@ function createInitialState(deviceMode) {
     device: { mode: deviceMode },
     project: { bpm: 120, timeSig: "4/4", lengthBars: 64 },
     transport: { isPlaying: false, isRecording: false, position: "0:0:0" },
+
     tracks: [
       { id: "t1", name: "Track 1", type: "audio", clips: [] },
       { id: "t2", name: "Track 2", type: "audio", clips: [] },
       { id: "t3", name: "Track 3", type: "audio", clips: [] },
     ],
+
+    assets: {
+      audio: [] // { id, name, bytes, type, durationSec }
+    },
+
     ui: {
       selectedTrackId: "t1",
       zoom: 1,
@@ -44,6 +50,20 @@ function setState(patchFn) {
   ui.render();
 }
 
+function nextTrackId() {
+  let n = 1;
+  const ids = new Set(state.tracks.map(t => t.id));
+  while (ids.has(`t${n}`)) n++;
+  return `t${n}`;
+}
+
+function nextAssetId() {
+  let n = 1;
+  const ids = new Set(state.assets.audio.map(a => a.id));
+  while (ids.has(`a${n}`)) n++;
+  return `a${n}`;
+}
+
 async function onUIEvent(evt) {
   switch (evt.type) {
     case "transport.togglePlay": {
@@ -71,7 +91,6 @@ async function onUIEvent(evt) {
 
     case "transport.toggleRecord": {
       await audio.ensureStarted();
-      // Scaffold only: toggle state; recording implementation later.
       setState(s => {
         s.transport.isRecording = !s.transport.isRecording;
         s.ui.message = s.transport.isRecording ? "Record armed (scaffold)" : "Record off";
@@ -93,6 +112,40 @@ async function onUIEvent(evt) {
 
     case "ui.selectTrack": {
       setState(s => { s.ui.selectedTrackId = evt.trackId; });
+      break;
+    }
+
+    case "tracks.add": {
+      const id = nextTrackId();
+      setState(s => {
+        const idx = s.tracks.length + 1;
+        s.tracks.push({ id, name: `Track ${idx}`, type: "audio", clips: [] });
+        s.ui.selectedTrackId = id;
+        s.ui.message = "Track added";
+      });
+      break;
+    }
+
+    case "audio.importFiles": {
+      const files = Array.from(evt.files || []);
+      if (!files.length) break;
+
+      await audio.ensureStarted();
+
+      setState(s => { s.ui.message = "Importing audio…"; });
+      const imported = await audio.importAudioFiles(files, nextAssetId);
+
+      setState(s => {
+        s.assets.audio.push(...imported);
+        s.ui.message = `${imported.length} audio file(s) imported`;
+      });
+      break;
+    }
+
+    case "audio.preview": {
+      await audio.ensureStarted();
+      audio.previewAsset(evt.assetId);
+      setState(s => { s.ui.message = "Preview"; });
       break;
     }
 
