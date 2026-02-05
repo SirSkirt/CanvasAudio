@@ -64,6 +64,22 @@ function nextAssetId() {
   return `a${n}`;
 }
 
+function nextClipId() {
+  let n = 1;
+  const ids = new Set();
+  for (const t of state.tracks) for (const c of (t.clips || [])) ids.add(c.id);
+  while (ids.has(`c${n}`)) n++;
+  return `c${n}`;
+}
+
+function getAsset(assetId) {
+  return state.assets.audio.find(a => a.id === assetId) || null;
+}
+
+function quantize(beats, gridBeats) {
+  return Math.max(0, Math.round(beats / gridBeats) * gridBeats);
+}
+
 async function onUIEvent(evt) {
   switch (evt.type) {
     case "transport.togglePlay": {
@@ -131,8 +147,8 @@ async function onUIEvent(evt) {
       if (!files.length) break;
 
       await audio.ensureStarted();
-
       setState(s => { s.ui.message = "Importing audio…"; });
+
       const imported = await audio.importAudioFiles(files, nextAssetId);
 
       setState(s => {
@@ -146,6 +162,32 @@ async function onUIEvent(evt) {
       await audio.ensureStarted();
       audio.previewAsset(evt.assetId);
       setState(s => { s.ui.message = "Preview"; });
+      break;
+    }
+
+    case "timeline.dropAssetAsClip": {
+      // payload: { assetId, trackId, startBeats }
+      const asset = getAsset(evt.assetId);
+      if (!asset) break;
+
+      const bpm = state.project.bpm || 120;
+      const durBeats = Math.max(0.25, (asset.durationSec || 1) * (bpm / 60)); // at least 1/16th
+      const startBeats = quantize(evt.startBeats || 0, 0.25); // 16th-note grid
+
+      setState(s => {
+        const t = s.tracks.find(x => x.id === evt.trackId) || s.tracks[0];
+        if (!t.clips) t.clips = [];
+        t.clips.push({
+          id: nextClipId(),
+          type: "audio",
+          assetId: evt.assetId,
+          startBeats,
+          durationBeats: durBeats,
+          name: asset.name
+        });
+        s.ui.selectedTrackId = t.id;
+        s.ui.message = "Clip added";
+      });
       break;
     }
 

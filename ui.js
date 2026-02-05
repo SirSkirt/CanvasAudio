@@ -8,8 +8,11 @@ export function createDesktopUI(canvas, emit) {
 
   let state = null;
   let dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
-  let isDragOverAudio = false;
 
+  // Drag state (audio asset -> timeline)
+  let drag = null; // { kind:"asset", assetId, name, x, y, startX, startY, moved }
+
+  // Hit regions (set each render)
   const hit = {
     play: null,
     stop: null,
@@ -20,9 +23,11 @@ export function createDesktopUI(canvas, emit) {
     tracksAdd: null,
     trackRows: [],
 
-    audioFolderBtn: null,
     audioImport: null,
-    audioItems: []
+    audioFolderBtn: null,
+    audioItems: [], // {assetId, rect}
+
+    timeline: null, // {x,y,w,h, gx,gy,gw,gh, lanes}
   };
 
   const theme = {
@@ -50,8 +55,10 @@ export function createDesktopUI(canvas, emit) {
   function mount() {
     resize();
     canvas.addEventListener("pointerdown", onPointerDown, { passive: false });
+    canvas.addEventListener("pointermove", onPointerMove, { passive: false });
+    canvas.addEventListener("pointerup", onPointerUp, { passive: false });
 
-    // Drag/drop (desktop). Browsers require dragover preventDefault to allow dropping.
+    // Drag/drop from OS (desktop)
     canvas.addEventListener("dragover", onDragOver, { passive: false });
     canvas.addEventListener("dragleave", onDragLeave, { passive: false });
     canvas.addEventListener("drop", onDrop, { passive: false });
@@ -59,6 +66,8 @@ export function createDesktopUI(canvas, emit) {
 
   function unmount() {
     canvas.removeEventListener("pointerdown", onPointerDown);
+    canvas.removeEventListener("pointermove", onPointerMove);
+    canvas.removeEventListener("pointerup", onPointerUp);
     canvas.removeEventListener("dragover", onDragOver);
     canvas.removeEventListener("dragleave", onDragLeave);
     canvas.removeEventListener("drop", onDrop);
@@ -68,50 +77,75 @@ export function createDesktopUI(canvas, emit) {
     return r && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
   }
 
-  function onDragOver(e) {
-    e.preventDefault();
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    const over = rectContains(hit.audioImport, x, y);
-    if (over !== isDragOverAudio) {
-      isDragOverAudio = over;
-      render();
-    }
+  function roundRectPath(x, y, w, h, r) {
+    const rr = Math.min(r, w/2, h/2);
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rr);
+    ctx.arcTo(x + w, y + h, x, y + h, rr);
+    ctx.arcTo(x, y + h, x, y, rr);
+    ctx.arcTo(x, y, x + w, y, rr);
+    ctx.closePath();
   }
 
-  function onDragLeave(e) {
-    e.preventDefault();
-    if (isDragOverAudio) {
-      isDragOverAudio = false;
-      render();
-    }
+  function glassPanel(x, y, w, h, r=14) {
+    ctx.save();
+    ctx.shadowColor = theme.glassShadow;
+    ctx.shadowBlur = 18;
+    ctx.shadowOffsetY = 8;
+    roundRectPath(x, y, w, h, r);
+    ctx.fillStyle = theme.glassFill;
+    ctx.fill();
+    ctx.restore();
+
+    roundRectPath(x + 0.5, y + 0.5, w - 1, h - 1, r);
+    ctx.strokeStyle = theme.glassStroke;
+    ctx.lineWidth = 1;
+    ctx.stroke();
   }
 
-  function onDrop(e) {
-    e.preventDefault();
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+  function drawBackground(w, h) {
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, theme.bgTop);
+    g.addColorStop(1, theme.bgBottom);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = "rgba(0,0,0,0.18)";
+    ctx.fillRect(0, 0, w, h);
+  }
 
-    if (!rectContains(hit.audioImport, x, y)) {
-      if (isDragOverAudio) {
-        isDragOverAudio = false;
-        render();
-      }
-      return;
+  function drawSquareButton(r, label, opts = {}) {
+    glassPanel(r.x, r.y, r.w, r.h, 12);
+    if (opts.active) {
+      roundRectPath(r.x + 2, r.y + 2, r.w - 4, r.h - 4, 10);
+      ctx.strokeStyle = opts.accent || theme.accent;
+      ctx.lineWidth = 2;
+      ctx.stroke();
     }
+    ctx.fillStyle = theme.text;
+    ctx.font = "600 12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "center";
+    ctx.fillText(label, r.x + r.w/2, r.y + r.h/2 + 0.5);
+    ctx.textAlign = "left";
+  }
 
-    const files = e.dataTransfer && e.dataTransfer.files ? e.dataTransfer.files : null;
-    isDragOverAudio = false;
-    render();
+  function drawSunkenBox(r, valueText) {
+    glassPanel(r.x, r.y, r.w, r.h, 10);
 
-    if (files && files.length) {
-      const arr = Array.from(files).filter(f =>
-        (f.type || "").startsWith("audio/") || f.name.match(/\.(wav|mp3|ogg|m4a|flac|aiff)$/i)
-      );
-      if (arr.length) emit({ type: "audio.importFiles", files: arr });
-    }
+    ctx.save();
+    roundRectPath(r.x + 3, r.y + 3, r.w - 6, r.h - 6, 8);
+    ctx.fillStyle = "rgba(2,6,23,0.55)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.fillStyle = theme.text;
+    ctx.font = "600 13px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
+    ctx.textBaseline = "middle";
+    ctx.fillText(valueText, r.x + 10, r.y + r.h/2 + 0.5);
   }
 
   function openBpmEditor(screenRect) {
@@ -163,11 +197,52 @@ export function createDesktopUI(canvas, emit) {
     input.click();
   }
 
+  // OS drag/drop (desktop)
+  let isDragOverAudio = false;
+  function onDragOver(e) {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const over = rectContains(hit.audioImport, x, y);
+    if (over !== isDragOverAudio) { isDragOverAudio = over; render(); }
+  }
+  function onDragLeave(e) {
+    e.preventDefault();
+    if (isDragOverAudio) { isDragOverAudio = false; render(); }
+  }
+  function onDrop(e) {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    const files = e.dataTransfer && e.dataTransfer.files ? e.dataTransfer.files : null;
+    const canDrop = rectContains(hit.audioImport, x, y);
+
+    isDragOverAudio = false;
+    render();
+
+    if (!canDrop || !files || !files.length) return;
+    const arr = Array.from(files).filter(f => (f.type || "").startsWith("audio/") || f.name.match(/\.(wav|mp3|ogg|m4a|flac|aiff)$/i));
+    if (arr.length) emit({ type: "audio.importFiles", files: arr });
+  }
+
   function onPointerDown(e) {
     e.preventDefault();
     const rect = canvas.getBoundingClientRect();
     const x = (e.clientX - rect.left);
     const y = (e.clientY - rect.top);
+
+    // Start a drag if pressing on an audio item; do not preview yet.
+    for (const it of hit.audioItems) {
+      if (rectContains(it.rect, x, y)) {
+        const asset = (state.assets?.audio || []).find(a => a.id === it.assetId);
+        drag = { kind: "asset", assetId: it.assetId, name: asset?.name || "Audio", x, y, startX: x, startY: y, moved: false };
+        canvas.setPointerCapture(e.pointerId);
+        return;
+      }
+    }
 
     if (rectContains(hit.play, x, y)) return emit({ type: "transport.togglePlay" });
     if (rectContains(hit.stop, x, y)) return emit({ type: "transport.stop" });
@@ -175,12 +250,13 @@ export function createDesktopUI(canvas, emit) {
     if (rectContains(hit.mixer, x, y)) return emit({ type: "ui.openMixer" });
 
     if (rectContains(hit.bpmBox, x, y)) {
-      openBpmEditor({
+      const screenRect = {
         left: rect.left + hit.bpmBox.x,
         top: rect.top + hit.bpmBox.y,
         width: hit.bpmBox.w,
         height: hit.bpmBox.h
-      });
+      };
+      openBpmEditor(screenRect);
       return;
     }
 
@@ -196,13 +272,6 @@ export function createDesktopUI(canvas, emit) {
       return;
     }
 
-    for (const it of hit.audioItems) {
-      if (rectContains(it.rect, x, y)) {
-        emit({ type: "audio.preview", assetId: it.assetId });
-        return;
-      }
-    }
-
     for (const row of hit.trackRows) {
       if (rectContains(row.rect, x, y)) {
         emit({ type: "ui.selectTrack", trackId: row.trackId });
@@ -211,94 +280,126 @@ export function createDesktopUI(canvas, emit) {
     }
   }
 
-  function drawBackground(w, h) {
-    const g = ctx.createLinearGradient(0, 0, 0, h);
-    g.addColorStop(0, theme.bgTop);
-    g.addColorStop(1, theme.bgBottom);
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = "rgba(0,0,0,0.18)";
-    ctx.fillRect(0, 0, w, h);
+  function onPointerMove(e) {
+    if (!drag) return;
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    drag.x = (e.clientX - rect.left);
+    drag.y = (e.clientY - rect.top);
+
+    const dx = drag.x - drag.startX;
+    const dy = drag.y - drag.startY;
+    if (!drag.moved && (Math.abs(dx) + Math.abs(dy) > 6)) drag.moved = true;
+
+    render();
   }
 
-  function roundRectPath(x, y, w, h, r) {
-    const rr = Math.min(r, w/2, h/2);
-    ctx.beginPath();
-    ctx.moveTo(x + rr, y);
-    ctx.arcTo(x + w, y, x + w, y + h, rr);
-    ctx.arcTo(x + w, y + h, x, y + h, rr);
-    ctx.arcTo(x, y + h, x, y, rr);
-    ctx.arcTo(x, y, x + w, y, rr);
-    ctx.closePath();
-  }
+  function onPointerUp(e) {
+    if (!drag) return;
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left);
+    const y = (e.clientY - rect.top);
 
-  function glassPanel(x, y, w, h, r=14) {
-    ctx.save();
-    ctx.shadowColor = theme.glassShadow;
-    ctx.shadowBlur = 18;
-    ctx.shadowOffsetY = 8;
-    roundRectPath(x, y, w, h, r);
-    ctx.fillStyle = theme.glassFill;
-    ctx.fill();
-    ctx.restore();
+    const wasMoved = drag.moved;
 
-    roundRectPath(x + 0.5, y + 0.5, w - 1, h - 1, r);
-    ctx.strokeStyle = theme.glassStroke;
-    ctx.lineWidth = 1;
-    ctx.stroke();
-  }
-
-  function drawSquareButton(r, label, opts = {}) {
-    glassPanel(r.x, r.y, r.w, r.h, 12);
-    if (opts.active) {
-      roundRectPath(r.x + 2, r.y + 2, r.w - 4, r.h - 4, 10);
-      ctx.strokeStyle = opts.accent || theme.accent;
-      ctx.lineWidth = 2;
-      ctx.stroke();
+    // If it was a tap (no drag), preview the audio
+    if (!wasMoved) {
+      emit({ type: "audio.preview", assetId: drag.assetId });
+      drag = null;
+      render();
+      return;
     }
-    ctx.fillStyle = theme.text;
-    ctx.font = "600 12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
-    ctx.textBaseline = "middle";
-    ctx.textAlign = "center";
-    ctx.fillText(label, r.x + r.w/2, r.y + r.h/2 + 0.5);
-    ctx.textAlign = "left";
+
+    // Drop onto timeline -> create a clip
+    if (hit.timeline && rectContains(hit.timeline, x, y)) {
+      const t = hit.timeline;
+      // Convert x to beats within visible range (16 bars * 4 beats = 64 beats)
+      const relX = clamp(x - t.gx, 0, t.gw);
+      const beats = (relX / t.gw) * t.totalBeats;
+
+      // Convert y to lane
+      const relY = clamp(y - t.gy, 0, t.gh);
+      const laneIdx = clamp(Math.floor((relY / t.gh) * t.lanes), 0, t.lanes - 1);
+      const trackId = (state.tracks[laneIdx] || state.tracks[0]).id;
+
+      emit({ type: "timeline.dropAssetAsClip", assetId: drag.assetId, trackId, startBeats: beats });
+    }
+
+    drag = null;
+    render();
   }
 
-  function drawSunkenBox(r, valueText) {
-    glassPanel(r.x, r.y, r.w, r.h, 10);
+  function renderDragGhost() {
+    if (!drag || drag.kind !== "asset") return;
+
+    const w = canvas.getBoundingClientRect().width;
+    const h = canvas.getBoundingClientRect().height;
+
+    const label = drag.name.length > 22 ? (drag.name.slice(0, 19) + "…") : drag.name;
+
+    const boxW = clamp(ctx.measureText(label).width + 40, 160, 260);
+    const boxH = 34;
+    const x = clamp(drag.x + 12, 10, w - boxW - 10);
+    const y = clamp(drag.y - 10, 10, h - boxH - 10);
+
     ctx.save();
-    roundRectPath(r.x + 3, r.y + 3, r.w - 6, r.h - 6, 8);
-    ctx.fillStyle = "rgba(2,6,23,0.55)";
+    ctx.globalAlpha = 0.95;
+    roundRectPath(x, y, boxW, boxH, 12);
+    ctx.fillStyle = "rgba(2,6,23,0.75)";
     ctx.fill();
-    ctx.strokeStyle = "rgba(255,255,255,0.10)";
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = theme.accent;
+    ctx.lineWidth = 1.5;
     ctx.stroke();
-    ctx.restore();
 
     ctx.fillStyle = theme.text;
-    ctx.font = "600 13px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
+    ctx.font = "700 12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
     ctx.textBaseline = "middle";
-    ctx.fillText(valueText, r.x + 10, r.y + r.h/2 + 0.5);
+    ctx.fillText("CLIP", x + 12, y + boxH/2 + 0.5);
+
+    ctx.fillStyle = theme.textDim;
+    ctx.font = "600 12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
+    ctx.fillText(label, x + 48, y + boxH/2 + 0.5);
+    ctx.restore();
   }
 
-  function drawFolderIcon(cx, cy, s) {
-    // simple folder glyph (no emoji)
-    const w = s, h = s * 0.74;
-    const x = cx - w/2, y = cy - h/2;
+  function renderClips() {
+    if (!hit.timeline) return;
+    const t = hit.timeline;
 
-    ctx.save();
-    ctx.strokeStyle = "rgba(226,232,240,0.85)";
-    ctx.lineWidth = 1.6;
+    const tracks = state.tracks || [];
+    for (let lane = 0; lane < t.lanes; lane++) {
+      const track = tracks[lane];
+      if (!track) continue;
+      const clips = track.clips || [];
 
-    // tab
-    roundRectPath(x, y + 2, w * 0.46, h * 0.35, 4);
-    ctx.stroke();
+      for (const c of clips) {
+        const start = c.startBeats || 0;
+        const dur = c.durationBeats || 1;
 
-    // body
-    roundRectPath(x, y + h * 0.22, w, h * 0.78, 5);
-    ctx.stroke();
+        const x = t.gx + (start / t.totalBeats) * t.gw;
+        const w = Math.max(18, (dur / t.totalBeats) * t.gw);
+        const laneY0 = t.gy + (t.gh * lane / t.lanes);
+        const laneH = t.gh / t.lanes;
+        const y = laneY0 + 8;
+        const h = laneH - 16;
 
-    ctx.restore();
+        roundRectPath(x, y, w, h, 10);
+        ctx.fillStyle = "rgba(56,189,248,0.16)";
+        ctx.fill();
+        ctx.strokeStyle = "rgba(56,189,248,0.55)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // Name
+        const name = (c.name || "Clip");
+        const label = name.length > 18 ? (name.slice(0, 15) + "…") : name;
+        ctx.fillStyle = theme.text;
+        ctx.font = "700 11px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
+        ctx.textBaseline = "top";
+        ctx.fillText(label, x + 10, y + 8);
+      }
+    }
   }
 
   function render() {
@@ -315,7 +416,7 @@ export function createDesktopUI(canvas, emit) {
     // Top bar
     glassPanel(pad, pad, w - pad*2, topBarH, 18);
 
-    // Transport
+    // Transport buttons
     const btn = { s: 44, gap: 10 };
     const bx = pad + 14;
     const by = pad + 10;
@@ -348,7 +449,7 @@ export function createDesktopUI(canvas, emit) {
     hit.bpmBox = { x: bpmLabelX + 38, y: by + 10, w: 76, h: 24 };
     drawSunkenBox(hit.bpmBox, String(state.project.bpm));
 
-    // Status right
+    // Status (right)
     ctx.fillStyle = theme.textDim;
     ctx.font = "500 12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
     ctx.textBaseline = "middle";
@@ -359,7 +460,7 @@ export function createDesktopUI(canvas, emit) {
     // Main split
     const mainTop = pad + topBarH + 12;
     const mainH = h - mainTop - pad;
-    const tracksW = clamp(Math.floor(w * 0.28), 240, 380);
+    const tracksW = clamp(Math.floor(w * 0.28), 260, 420);
     const gap = 12;
 
     const tracksRect = { x: pad, y: mainTop, w: tracksW, h: mainH };
@@ -390,9 +491,9 @@ export function createDesktopUI(canvas, emit) {
     ctx.fillText("+", hit.tracksAdd.x + hit.tracksAdd.w/2, hit.tracksAdd.y + hit.tracksAdd.h/2 + 0.5);
     ctx.textAlign = "left";
 
-    // Compute areas: track list then audio files box at bottom
+    // Allocate fixed Audio Files height so it's always visible
+    const audioPanelH = clamp(220, 200, Math.floor(innerH * 0.45));
     const listTop = innerY + headerH + 6;
-    const audioPanelH = clamp(Math.floor(innerH * 0.30), 170, 260);
     const listH = innerH - (headerH + 6) - audioPanelH - 18;
 
     // Clip to tracks panel
@@ -401,13 +502,13 @@ export function createDesktopUI(canvas, emit) {
     roundRectPath(tracksRect.x, tracksRect.y, tracksRect.w, tracksRect.h, 18);
     ctx.clip();
 
-    // Track rows
+    // Track list
     hit.trackRows = [];
     const rowH = 58;
     const rowGap = 10;
-
-    for (let i = 0; i < state.tracks.length; i++) {
-      const t = state.tracks[i];
+    const tracks = state.tracks || [];
+    for (let i = 0; i < tracks.length; i++) {
+      const t = tracks[i];
       const ry = listTop + i * (rowH + rowGap);
       if (ry > listTop + listH - rowH) break;
 
@@ -433,19 +534,36 @@ export function createDesktopUI(canvas, emit) {
       ctx.fillText(t.type.toUpperCase(), rr.x + 14, rr.y + 30);
     }
 
-    // AUDIO FILES header + folder button + drop box
+    // AUDIO FILES panel
     const audioY = tracksRect.y + tracksRect.h - innerPad - audioPanelH;
     const audioRect = { x: innerX, y: audioY, w: innerW, h: audioPanelH };
 
+    // Header label
     ctx.fillStyle = theme.textDim;
     ctx.font = "700 12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
     ctx.textBaseline = "middle";
     ctx.fillText("AUDIO FILES", audioRect.x + 2, audioRect.y - 10);
 
-    hit.audioFolderBtn = { x: audioRect.x + audioRect.w - 30, y: audioRect.y - 22, w: 28, h: 18 };
+    // Folder icon button (drawn)
+    hit.audioFolderBtn = { x: audioRect.x + audioRect.w - 34, y: audioRect.y - 22, w: 28, h: 18 };
     glassPanel(hit.audioFolderBtn.x, hit.audioFolderBtn.y, hit.audioFolderBtn.w, hit.audioFolderBtn.h, 8);
-    drawFolderIcon(hit.audioFolderBtn.x + hit.audioFolderBtn.w/2, hit.audioFolderBtn.y + hit.audioFolderBtn.h/2, 14);
+    // draw folder
+    ctx.save();
+    ctx.translate(hit.audioFolderBtn.x + 7, hit.audioFolderBtn.y + 5);
+    ctx.strokeStyle = "rgba(226,232,240,0.85)";
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.roundRect ? ctx.roundRect(0, 4, 14, 8, 2) : roundRectPath(hit.audioFolderBtn.x+7, hit.audioFolderBtn.y+9, 14, 8, 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(1, 4);
+    ctx.lineTo(6, 4);
+    ctx.lineTo(7.5, 2.2);
+    ctx.lineTo(13, 2.2);
+    ctx.stroke();
+    ctx.restore();
 
+    // Import box
     hit.audioImport = { x: audioRect.x, y: audioRect.y, w: audioRect.w, h: audioRect.h };
     roundRectPath(hit.audioImport.x, hit.audioImport.y, hit.audioImport.w, hit.audioImport.h, 16);
     ctx.fillStyle = "rgba(255,255,255,0.04)";
@@ -461,14 +579,16 @@ export function createDesktopUI(canvas, emit) {
       ctx.stroke();
     }
 
+    // Hint
     ctx.fillStyle = theme.textDim;
     ctx.font = "600 12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
     ctx.textBaseline = "top";
-    ctx.fillText("Tap, folder, or drop audio here", audioRect.x + 14, audioRect.y + 12);
+    ctx.fillText("Tap folder, click box, or drop audio here", audioRect.x + 14, audioRect.y + 12);
 
-    // Audio list (click to preview)
+    // Audio list (draggable rows)
     const list = (state.assets && state.assets.audio) ? state.assets.audio : [];
     hit.audioItems = [];
+
     ctx.font = "500 12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
     const maxRows = Math.floor((audioRect.h - 44) / 18);
     for (let i = 0; i < Math.min(list.length, maxRows); i++) {
@@ -501,7 +621,7 @@ export function createDesktopUI(canvas, emit) {
       ctx.fillText(`+${list.length - maxRows} more`, audioRect.x + 14, audioRect.y + 38 + maxRows * 18);
     }
 
-    ctx.restore();
+    ctx.restore(); // end clip to tracks panel
 
     // Timeline grid
     ctx.save();
@@ -519,12 +639,17 @@ export function createDesktopUI(canvas, emit) {
 
     const bars = 16;
     const beatsPerBar = 4;
-    const totalCols = bars * beatsPerBar;
+    const totalBeats = bars * beatsPerBar;
 
-    for (let c = 0; c <= totalCols; c++) {
-      const x = gx + (gw * c / totalCols);
-      const isBar = (c % beatsPerBar) === 0;
-      ctx.strokeStyle = isBar ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.06)";
+    // Store for dropping
+    hit.timeline = { x: timelineRect.x, y: timelineRect.y, w: timelineRect.w, h: timelineRect.h, gx, gy, gw, gh, lanes: clamp(tracks.length, 3, 10), totalBeats };
+
+    // verticals
+    for (let b = 0; b <= totalBeats * 4; b++) { // 16th grid
+      const x = gx + (gw * b / (totalBeats * 4));
+      const isBeat = (b % 4) === 0;
+      const isBar = (b % (beatsPerBar * 4)) === 0;
+      ctx.strokeStyle = isBar ? "rgba(255,255,255,0.12)" : (isBeat ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.04)");
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(x + 0.5, gy);
@@ -532,7 +657,8 @@ export function createDesktopUI(canvas, emit) {
       ctx.stroke();
     }
 
-    const lanes = clamp(state.tracks.length, 3, 10);
+    // horizontals
+    const lanes = hit.timeline.lanes;
     for (let r = 0; r <= lanes; r++) {
       const y = gy + (gh * r / lanes);
       ctx.strokeStyle = "rgba(255,255,255,0.07)";
@@ -543,17 +669,27 @@ export function createDesktopUI(canvas, emit) {
       ctx.stroke();
     }
 
+    // bar numbers
     ctx.fillStyle = theme.textDim;
     ctx.font = "600 11px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
     ctx.textBaseline = "top";
-    for (let b = 0; b < bars; b++) {
-      const x = gx + (gw * (b * beatsPerBar) / totalCols);
-      ctx.fillText(String(b + 1), x + 6, gy + 6);
+    for (let i = 0; i < bars; i++) {
+      const x = gx + (gw * (i * beatsPerBar) / totalBeats);
+      ctx.fillText(String(i + 1), x + 6, gy + 6);
     }
+
+    // Clips
+    renderClips();
 
     ctx.restore();
 
-    // Title subtle
+    // Drag ghost on top
+    ctx.save();
+    ctx.font = "700 12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
+    renderDragGhost();
+    ctx.restore();
+
+    // Title
     ctx.fillStyle = "rgba(226,232,240,0.14)";
     ctx.font = "800 34px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
     ctx.textBaseline = "alphabetic";

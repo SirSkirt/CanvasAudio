@@ -30,7 +30,11 @@ Audio update:
 - Pizzicato.js is included (not wired yet).
 
 
-Audio import UI:
-- Audio Files panel is visible at bottom of left panel.
-- Import via clicking the box, clicking the folder button, or drag-and-drop onto the box (desktop).
-- Click an imported filename to preview.
+Audio import UI update:
+- Audio Files panel supports drag-and-drop (drop audio onto the box).
+- Folder button (📁) opens file picker.
+
+
+Clip drag/drop:
+- Drag an imported audio item from AUDIO FILES onto the timeline to create a clip.
+- Tap an audio item (without moving) to preview.
