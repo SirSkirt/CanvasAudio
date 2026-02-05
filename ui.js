@@ -18,6 +18,8 @@ export function createDesktopUI(canvas, emit) {
     trackRows: [] // {trackId, rect}
   };
 
+  let isDragOverAudio = false;
+
   const theme = {
     bgTop: "#020617",
     bgBottom: "#0b1220",
@@ -43,14 +45,65 @@ export function createDesktopUI(canvas, emit) {
   function mount() {
     resize();
     canvas.addEventListener("pointerdown", onPointerDown, { passive: false });
+    canvas.addEventListener("dragover", onDragOver, { passive: false });
+    canvas.addEventListener("dragleave", onDragLeave, { passive: false });
+    canvas.addEventListener("drop", onDrop, { passive: false });
   }
 
   function unmount() {
     canvas.removeEventListener("pointerdown", onPointerDown);
+    canvas.removeEventListener("dragover", onDragOver);
+    canvas.removeEventListener("dragleave", onDragLeave);
+    canvas.removeEventListener("drop", onDrop);
   }
 
   function rectContains(r, x, y) {
     return r && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+  }
+
+  function onDragOver(e) {
+    // Allow drop
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    const over = rectContains(hit.audioImport, x, y);
+    if (over !== isDragOverAudio) {
+      isDragOverAudio = over;
+      render();
+    }
+  }
+
+  function onDragLeave(e) {
+    e.preventDefault();
+    if (isDragOverAudio) {
+      isDragOverAudio = false;
+      render();
+    }
+  }
+
+  function onDrop(e) {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    if (!rectContains(hit.audioImport, x, y)) {
+      isDragOverAudio = false;
+      render();
+      return;
+    }
+
+    const files = e.dataTransfer && e.dataTransfer.files ? e.dataTransfer.files : null;
+    isDragOverAudio = false;
+    render();
+
+    if (files && files.length) {
+      // Filter to audio/* where possible
+      const arr = Array.from(files).filter(f => (f.type || "").startsWith("audio/") || f.name.match(/\.(wav|mp3|ogg|m4a|flac|aiff)$/i));
+      if (arr.length) emit({ type: "audio.importFiles", files: arr });
+    }
   }
 
   function onPointerDown(e) {

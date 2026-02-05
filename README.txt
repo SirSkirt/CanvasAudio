@@ -28,3 +28,8 @@ Audio update:
 - Audio import decodes files into Tone buffers.
 - Tap an imported audio filename to preview (one-shot audition).
 - Pizzicato.js is included (not wired yet).
+
+
+Audio import UI update:
+- Audio Files panel supports drag-and-drop (drop audio onto the box).
+- Folder button (📁) opens file picker.
